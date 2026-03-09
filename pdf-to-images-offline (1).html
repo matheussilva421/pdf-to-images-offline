@@ -169,6 +169,8 @@
   }
   .page-download-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+  .page-card-actions { display: flex; align-items: center; gap: 8px; }
+
   .preview-bar {
     background: var(--green-bar); padding: 6px 14px;
     display: flex; align-items: center; gap: 8px; border-radius: 6px; margin-top: 12px;
@@ -248,6 +250,18 @@
     color: var(--text-muted); cursor: pointer; transition: all 0.2s;
   }
   .editor-action-btn:hover { border-color: #c0c6cf; color: var(--text); }
+
+  .editor-action-btn.danger,
+  .page-delete-btn {
+    border-color: #e7b3b3;
+    color: #b04141;
+  }
+  .editor-action-btn.danger:hover,
+  .page-delete-btn:hover {
+    border-color: #b04141;
+    background: #fff4f4;
+    color: #8f2e2e;
+  }
 
   .editor-canvas-wrap {
     overflow: auto;
@@ -476,7 +490,10 @@ async function render() {
               </div>
               <div class="page-card-footer">
                 <span>Evento ${state.eventoNum} — Página ${r.pageNum}</span>
-                <button class="page-download-btn" data-idx="${i}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
+                <div class="page-card-actions">
+                  <button class="page-download-btn" data-idx="${i}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
+                  <button class="page-download-btn page-delete-btn" data-delete-idx="${i}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg> Excluir</button>
+                </div>
               </div>
             </div>
           `).join('')}
@@ -497,8 +514,20 @@ function bindEvents() {
   document.querySelectorAll('.scale-btn').forEach(btn=>{btn.addEventListener('click',()=>{state.scale=parseInt(btn.dataset.scale);render();});});
   const cb=document.getElementById('convertBtn');if(cb)cb.addEventListener('click',startConversion);
   const da=document.getElementById('downloadAllBtn');if(da)da.addEventListener('click',downloadAllZip);
-  document.querySelectorAll('.page-download-btn').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx));});});
+  document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx));});});
+  document.querySelectorAll('.page-delete-btn[data-delete-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();deleteResultAt(parseInt(btn.dataset.deleteIdx));});});
   document.querySelectorAll('.page-card-img[data-edit]').forEach(el=>{el.addEventListener('click',()=>openEditor(parseInt(el.dataset.edit)));});
+}
+
+function deleteResultAt(idx){
+  const result=state.results[idx];
+  if(!result)return;
+  const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
+  if(!ok)return;
+  if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
+  state.results.splice(idx,1);
+  state.previewUrls.splice(idx,1);
+  render();
 }
 
 async function handleFileObj(file){
@@ -594,6 +623,10 @@ function openEditor(idx){
           <button class="editor-action-btn" id="editorReset">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M2.5 2v6h6"/><path d="M2.5 8a10 10 0 1 1 .5 4"/></svg>
             Resetar
+          </button>
+          <button class="editor-action-btn danger" id="editorDelete">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+            Excluir página
           </button>
         </div>
       </div>
@@ -726,6 +759,24 @@ function wireEditor(){
 
   document.getElementById('editorPrev').addEventListener('click',()=>nav(state.editorIdx-1));
   document.getElementById('editorNext').addEventListener('click',()=>nav(state.editorIdx+1));
+  document.getElementById('editorDelete').addEventListener('click',()=>{
+    const idx=state.editorIdx;
+    const result=state.results[idx];
+    if(!result)return;
+    const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
+    if(!ok)return;
+    if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
+    state.results.splice(idx,1);
+    state.previewUrls.splice(idx,1);
+    if(state.results.length===0){
+      if(state.editorCleanup){state.editorCleanup();state.editorCleanup=null;}
+      state.editorOpen=false;
+      render();
+      return;
+    }
+    const nextIdx=Math.min(idx,state.results.length-1);
+    loadPage(nextIdx);
+  });
 
   function closeEditor(){
     commitPage();
