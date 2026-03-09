@@ -408,10 +408,25 @@ async function refreshPreviewUrl(idx) {
   const result = state.results[idx];
   if (!result) return '';
   if (state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
-  const blob = await new Promise(resolve => result.canvas.toBlob(resolve, 'image/png'));
-  const url = URL.createObjectURL(blob);
+  if (!result.imageBlob) {
+    state.previewUrls[idx] = '';
+    return '';
+  }
+  const url = URL.createObjectURL(result.imageBlob);
   state.previewUrls[idx] = url;
   return url;
+}
+
+function canvasToBlobSafe(canvas, type = 'image/png') {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob) {
+        reject(new Error('Falha ao converter canvas para imagem.'));
+        return;
+      }
+      resolve(blob);
+    }, type);
+  });
 }
 
 async function ensurePreviewUrls(limit = state.results.length) {
@@ -569,7 +584,9 @@ async function startConversion(){
       await page.render({canvasContext:pdfC.getContext('2d'),viewport:vp}).promise;
       const barH=Math.max(Math.round(vp.width*0.045),32);const fc=document.createElement('canvas');fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
       drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
-      state.results.push({canvas:fc,pageNum:i,edited:false});
+      const imageBlob=await canvasToBlobSafe(fc,'image/png');
+      state.results.push({imageBlob,pageNum:i,edited:false});
+      pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
       await new Promise(requestAnimationFrame);
     }
     state.progress=100;state.progressText='Concluído!';state.converting=false;render();
@@ -645,20 +662,32 @@ function openEditor(idx){
     </div>
   `;
 
-  loadPage(idx);
-  wireEditor();
+  loadPage(idx)
+    .then(wireEditor)
+    .catch(err=>{
+      console.error(err);
+      alert('Erro ao abrir editor: '+err.message);
+      state.editorOpen=false;
+      render();
+    });
 }
 
-function loadPage(idx){
+async function loadPage(idx){
   state.editorIdx=idx;
   state.editorHistory=[];
   const result=state.results[idx];
-  const src=result.canvas;
   const canvas=document.getElementById('editorCanvas');
   const overlay=document.getElementById('editorOverlay');
-  canvas.width=src.width;canvas.height=src.height;
-  overlay.width=src.width;overlay.height=src.height;
-  canvas.getContext('2d').drawImage(src,0,0);
+  const url=URL.createObjectURL(result.imageBlob);
+  const img=await new Promise((resolve,reject)=>{
+    const i=new Image();
+    i.onload=()=>resolve(i);
+    i.onerror=()=>reject(new Error('Falha ao carregar imagem da página para edição.'));
+    i.src=url;
+  }).finally(()=>URL.revokeObjectURL(url));
+  canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
+  overlay.width=img.naturalWidth;overlay.height=img.naturalHeight;
+  canvas.getContext('2d').drawImage(img,0,0);
   state.editorHistory.push(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height));
 
   const total=state.results.length;
@@ -668,15 +697,14 @@ function loadPage(idx){
   document.getElementById('editorWrap').scrollTop=0;
 }
 
-function commitPage(){
+async function commitPage(){
   const canvas=document.getElementById('editorCanvas');
   if(!canvas)return;
   const idx=state.editorIdx;
-  const src=state.results[idx].canvas;
-  const srcCtx=src.getContext('2d');
-  srcCtx.clearRect(0,0,src.width,src.height);
-  srcCtx.drawImage(canvas,0,0);
-  refreshPreviewUrl(idx).then(()=>{ if(!state.editorOpen) render(); });
+  const result=state.results[idx];
+  result.imageBlob=await canvasToBlobSafe(canvas,'image/png');
+  await refreshPreviewUrl(idx);
+  if(!state.editorOpen) render();
   if(state.editorHistory.length>1) state.results[idx].edited=true;
 }
 
@@ -719,9 +747,9 @@ function wireEditor(){
     const w=Math.round(Math.abs(p.x-startX)),h=Math.round(Math.abs(p.y-startY));
     if(w<4||h<4)return;
     const c=document.getElementById('editorCanvas'),ctx=c.getContext('2d');
-    state.editorHistory.push(ctx.getImageData(0,0,c.width,c.height));
     if(state.editorTool==='black'){ctx.fillStyle='#000000';ctx.fillRect(x,y,w,h);}
     else{applyBlur(ctx,x,y,w,h,c.width,c.height);}
+    state.editorHistory.push(ctx.getImageData(0,0,c.width,c.height));
   }
 
   overlay.addEventListener('mousedown',down);
@@ -756,14 +784,14 @@ function wireEditor(){
     document.getElementById('editorCanvas').getContext('2d').putImageData(first,0,0);
   });
 
-  function nav(newIdx){
+  async function nav(newIdx){
     if(newIdx<0||newIdx>=state.results.length)return;
-    commitPage();
-    loadPage(newIdx);
+    await commitPage();
+    await loadPage(newIdx);
   }
 
-  document.getElementById('editorPrev').addEventListener('click',()=>nav(state.editorIdx-1));
-  document.getElementById('editorNext').addEventListener('click',()=>nav(state.editorIdx+1));
+  document.getElementById('editorPrev').addEventListener('click',()=>{nav(state.editorIdx-1);});
+  document.getElementById('editorNext').addEventListener('click',()=>{nav(state.editorIdx+1);});
   document.getElementById('editorDelete').addEventListener('click',()=>{
     const idx=state.editorIdx;
     const result=state.results[idx];
@@ -780,17 +808,20 @@ function wireEditor(){
       return;
     }
     const nextIdx=Math.min(idx,state.results.length-1);
-    loadPage(nextIdx);
+    loadPage(nextIdx).catch(err=>{
+      console.error(err);
+      alert('Erro ao carregar página: '+err.message);
+    });
   });
 
-  function closeEditor(){
-    commitPage();
+  async function closeEditor(){
+    await commitPage();
     if(state.editorCleanup){state.editorCleanup();state.editorCleanup=null;}
     state.editorOpen=false;render();
   }
 
-  document.getElementById('editorSave').addEventListener('click',closeEditor);
-  document.getElementById('editorClose').addEventListener('click',closeEditor);
+  document.getElementById('editorSave').addEventListener('click',()=>{closeEditor();});
+  document.getElementById('editorClose').addEventListener('click',()=>{closeEditor();});
 
   function onKey(e){
     if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
@@ -829,8 +860,11 @@ function getBaseName(){return state.fileName.replace(/\.pdf$/i,'');}
 
 function downloadOne(idx){
   const r=state.results[idx];const a=document.createElement('a');
-  a.href=r.canvas.toDataURL('image/png');
+  if(!r?.imageBlob){alert('Imagem indisponível para download.');return;}
+  const url=URL.createObjectURL(r.imageBlob);
+  a.href=url;
   a.download=`${getBaseName()}_evento${state.eventoNum}_pagina${r.pageNum}.png`;a.click();
+  URL.revokeObjectURL(url);
 }
 
 async function downloadAllZip(){
@@ -838,8 +872,8 @@ async function downloadAllZip(){
   try{
     const zip=new JSZip();const bn=getBaseName();const folder=zip.folder(`${bn}_evento${state.eventoNum}`);
     for(const r of state.results){
-      const blob=await new Promise(res=>r.canvas.toBlob(res,'image/png'));
-      folder.file(`${bn}_evento${state.eventoNum}_pagina${r.pageNum}.png`,blob);
+      if(!r.imageBlob) throw new Error(`Página ${r.pageNum} sem imagem válida para exportação.`);
+      folder.file(`${bn}_evento${state.eventoNum}_pagina${r.pageNum}.png`,r.imageBlob);
     }
     const content=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
     const url=URL.createObjectURL(content);const a=document.createElement('a');a.href=url;
