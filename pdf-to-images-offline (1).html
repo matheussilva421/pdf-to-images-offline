@@ -381,10 +381,41 @@ let state = {
   editorTool: 'black',
   editorHistory: [],
   editorCleanup: null,
+  previewUrls: [],
 };
 
-function render() {
+function releasePreviewUrls() {
+  state.previewUrls.forEach(url => URL.revokeObjectURL(url));
+  state.previewUrls = [];
+}
+
+async function refreshPreviewUrl(idx) {
+  const result = state.results[idx];
+  if (!result) return '';
+  if (state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
+  const blob = await new Promise(resolve => result.canvas.toBlob(resolve, 'image/png'));
+  const url = URL.createObjectURL(blob);
+  state.previewUrls[idx] = url;
+  return url;
+}
+
+async function ensurePreviewUrls() {
+  if (state.previewUrls.length > state.results.length) {
+    for (let i = state.results.length; i < state.previewUrls.length; i++) {
+      if (state.previewUrls[i]) URL.revokeObjectURL(state.previewUrls[i]);
+    }
+    state.previewUrls.length = state.results.length;
+  }
+  const updates = [];
+  for (let i = 0; i < state.results.length; i++) {
+    if (!state.previewUrls[i]) updates.push(refreshPreviewUrl(i));
+  }
+  if (updates.length) await Promise.all(updates);
+}
+
+async function render() {
   if (state.editorOpen) return;
+  await ensurePreviewUrls();
   app.innerHTML = `
     <div class="setup-card">
       <div class="form-group">
@@ -439,7 +470,7 @@ function render() {
           ${state.results.map((r,i)=>`
             <div class="page-card">
               <div class="page-card-img" data-edit="${i}">
-                <img src="${r.canvas.toDataURL('image/png')}" alt="Página ${r.pageNum}" loading="lazy"/>
+                <img src="${state.previewUrls[i]}" alt="Página ${r.pageNum}" loading="lazy"/>
                 <div class="page-card-overlay"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Editar</span></div>
                 ${r.edited?'<div class="edited-badge">Editado</div>':''}
               </div>
@@ -472,6 +503,7 @@ function bindEvents() {
 
 async function handleFileObj(file){
   if(file.type!=='application/pdf'){alert('Selecione um arquivo PDF.');return;}
+  releasePreviewUrls();
   state.file=file;state.fileName=file.name;state.filePages=0;state.results=[];render();
   const ab=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:ab}).promise;
@@ -491,6 +523,7 @@ function drawBar(ctx,width,barH,eventoNum,pageNum){
 }
 
 async function startConversion(){
+  releasePreviewUrls();
   state.converting=true;state.progress=0;state.results=[];render();
   try{
     const ab=await state.file.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:ab}).promise;const total=pdf.numPages;
@@ -502,6 +535,7 @@ async function startConversion(){
       const barH=Math.max(Math.round(vp.width*0.045),32);const fc=document.createElement('canvas');fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
       drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
       state.results.push({canvas:fc,pageNum:i,edited:false});
+      if(i % 2 === 0) await new Promise(requestAnimationFrame);
     }
     state.progress=100;state.progressText='Concluído!';state.converting=false;render();
   }catch(err){console.error(err);alert('Erro: '+err.message);state.converting=false;render();}
@@ -604,6 +638,7 @@ function commitPage(){
   const srcCtx=src.getContext('2d');
   srcCtx.clearRect(0,0,src.width,src.height);
   srcCtx.drawImage(canvas,0,0);
+  refreshPreviewUrl(idx).then(()=>{ if(!state.editorOpen) render(); });
   if(state.editorHistory.length>1) state.results[idx].edited=true;
 }
 
