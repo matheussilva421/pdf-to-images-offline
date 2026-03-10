@@ -141,6 +141,8 @@
   .download-all-btn:hover { background: var(--accent); color: white; }
   .download-all-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  .results-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
   .page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
 
   .page-card {
@@ -427,6 +429,7 @@ let state = {
   scale: 2,
   converting: false,
   zipping: false,
+  merging: false,
   progress: 0,
   progressText: '',
   results: [],
@@ -550,9 +553,14 @@ async function render() {
       <div class="results-section">
         <div class="results-header">
           <h2>✅ ${state.results.length} imagem(ns) gerada(s)</h2>
-          <button class="download-all-btn" id="downloadAllBtn" ${state.zipping?'disabled':''}>
-            ${state.zipping?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Compactando...`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/><line x1="5" y1="21" x2="19" y2="21"/></svg> Baixar todas (.zip)`}
-          </button>
+          <div class="results-actions">
+            <button class="download-all-btn" id="mergePairsBtn" ${state.results.length<2||state.zipping||state.merging?'disabled':''}>
+              ${state.merging?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Juntando...`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M10 12h4"/></svg> Juntar 2 em 1`}
+            </button>
+            <button class="download-all-btn" id="downloadAllBtn" ${state.zipping||state.merging?'disabled':''}>
+              ${state.zipping?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Compactando...`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/><line x1="5" y1="21" x2="19" y2="21"/></svg> Baixar todas (.zip)`}
+            </button>
+          </div>
         </div>
         <p class="results-hint">🖊️ Clique em uma imagem para revisar e censurar dados sensíveis</p>
         <div class="page-grid">
@@ -605,6 +613,7 @@ function bindEvents() {
   const pf=document.getElementById('pageFromInput');if(pf)pf.addEventListener('input',e=>{state.pageFrom=e.target.value;});
   const pt=document.getElementById('pageToInput');if(pt)pt.addEventListener('input',e=>{state.pageTo=e.target.value;});
   const cb=document.getElementById('convertBtn');if(cb)cb.addEventListener('click',startConversion);
+  const mp=document.getElementById('mergePairsBtn');if(mp)mp.addEventListener('click',mergeResultsInPairs);
   const da=document.getElementById('downloadAllBtn');if(da)da.addEventListener('click',downloadAllZip);
   const lm=document.getElementById('loadMoreBtn');if(lm)lm.addEventListener('click',()=>{state.visibleResults+=30;render();});
   document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx),btn.dataset.fmt||'png');});});
@@ -668,6 +677,60 @@ async function startConversion(){
     }
     state.progress=100;state.progressText='Concluído!';state.converting=false;render();
   }catch(err){console.error(err);alert('Erro: '+err.message);state.converting=false;render();}
+}
+
+async function loadImageFromBlob(blob){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(blob);
+    const img=new Image();
+    img.onload=()=>{URL.revokeObjectURL(url);resolve(img);};
+    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Falha ao carregar imagem para combinar.'));};
+    img.src=url;
+  });
+}
+
+async function mergeResultsInPairs(){
+  if(state.results.length<2){alert('Você precisa de pelo menos 2 imagens para juntar.');return;}
+  if(!confirm('Juntar as imagens de 2 em 2 lado a lado?')) return;
+  state.merging=true;
+  render();
+  try{
+    const merged=[];
+    for(let i=0;i<state.results.length;i+=2){
+      const first=state.results[i];
+      const second=state.results[i+1];
+      if(!second){
+        merged.push({...first});
+        continue;
+      }
+      const [imgA,imgB]=await Promise.all([loadImageFromBlob(first.imageBlob),loadImageFromBlob(second.imageBlob)]);
+      const canvas=document.createElement('canvas');
+      canvas.width=imgA.naturalWidth+imgB.naturalWidth;
+      canvas.height=Math.max(imgA.naturalHeight,imgB.naturalHeight);
+      const ctx=canvas.getContext('2d');
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(imgA,0,0);
+      ctx.drawImage(imgB,imgA.naturalWidth,0);
+      const imageBlob=await canvasToBlobSafe(canvas,'image/png');
+      merged.push({
+        imageBlob,
+        pageNum:`${first.pageNum}-${second.pageNum}`,
+        edited:first.edited||second.edited,
+      });
+      canvas.width=0;
+      canvas.height=0;
+    }
+    releasePreviewUrls();
+    state.results=merged;
+    state.visibleResults=30;
+    showToast('Imagens juntadas com sucesso (2 em 1).');
+  }catch(err){
+    console.error(err);
+    alert('Erro ao juntar imagens: '+err.message);
+  }
+  state.merging=false;
+  render();
 }
 
 // ══════════════════════════════
