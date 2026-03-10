@@ -802,7 +802,7 @@ function openEditor(idx){
           <canvas id="editorOverlay"></canvas>
         </div>
       </div>
-      <div class="editor-hint">Arraste para censurar &middot; <kbd>Ctrl+Z</kbd> desfazer &middot; <kbd>R</kbd> girar &middot; <kbd>←</kbd> <kbd>→</kbd> navegar páginas</div>
+      <div class="editor-hint">Arraste para censurar &middot; <kbd>Ctrl+Z</kbd> desfazer &middot; <kbd>R</kbd> girar &middot; <kbd>Delete</kbd> excluir página &middot; <kbd>←</kbd> <kbd>→</kbd> navegar páginas</div>
     </div>
   `;
 
@@ -948,6 +948,25 @@ function wireEditor(){
     document.getElementById('editorCanvas').getContext('2d').putImageData(state.editorHistory[state.editorHistory.length-1],0,0);
   }
 
+  async function deleteCurrentPage(){
+    const idx=state.editorIdx;
+    const result=state.results[idx];
+    if(!result)return;
+    const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
+    if(!ok)return;
+    if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
+    state.results.splice(idx,1);
+    state.previewUrls.splice(idx,1);
+    if(state.results.length===0){
+      if(state.editorCleanup){state.editorCleanup();state.editorCleanup=null;}
+      state.editorOpen=false;
+      render();
+      return;
+    }
+    const nextIdx=Math.min(idx,state.results.length-1);
+    await loadPage(nextIdx);
+  }
+
   document.getElementById('editorRotate').addEventListener('click',()=>{rotateCurrentPage();});
   document.getElementById('editorUndo').addEventListener('click',undo);
   document.getElementById('editorReset').addEventListener('click',()=>{
@@ -965,22 +984,7 @@ function wireEditor(){
   document.getElementById('editorPrev').addEventListener('click',()=>{nav(state.editorIdx-1);});
   document.getElementById('editorNext').addEventListener('click',()=>{nav(state.editorIdx+1);});
   document.getElementById('editorDelete').addEventListener('click',()=>{
-    const idx=state.editorIdx;
-    const result=state.results[idx];
-    if(!result)return;
-    const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
-    if(!ok)return;
-    if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
-    state.results.splice(idx,1);
-    state.previewUrls.splice(idx,1);
-    if(state.results.length===0){
-      if(state.editorCleanup){state.editorCleanup();state.editorCleanup=null;}
-      state.editorOpen=false;
-      render();
-      return;
-    }
-    const nextIdx=Math.min(idx,state.results.length-1);
-    loadPage(nextIdx).catch(err=>{
+    deleteCurrentPage().catch(err=>{
       console.error(err);
       alert('Erro ao carregar página: '+err.message);
     });
@@ -1000,6 +1004,7 @@ function wireEditor(){
     if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
     else if(e.key==='ArrowLeft'){e.preventDefault();nav(state.editorIdx-1);}
     else if(e.key==='ArrowRight'){e.preventDefault();nav(state.editorIdx+1);}
+    else if(!e.ctrlKey&&!e.metaKey&&(e.key==='Delete'||e.key==='Backspace')){e.preventDefault();deleteCurrentPage().catch(err=>{console.error(err);alert('Erro ao excluir página: '+err.message);});}
     else if(!e.ctrlKey&&!e.metaKey&&e.key.toLowerCase()==='r'){e.preventDefault();rotateCurrentPage();}
   }
   document.addEventListener('keydown',onKey);
