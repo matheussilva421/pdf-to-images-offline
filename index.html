@@ -445,6 +445,29 @@ let state = {
   pageTo: '',
 };
 
+const SHORTCUTS={
+  undo:['Ctrl+Z','⌘+Z'],
+  rotate:['R'],
+  deletePage:['Delete'],
+  prevPage:['←'],
+  nextPage:['→'],
+};
+
+function matchesShortcut(e,keys){
+  const k=(e.key||'').toLowerCase();
+  if(keys.includes('Ctrl+Z')&&e.ctrlKey&&k==='z')return true;
+  if(keys.includes('⌘+Z')&&e.metaKey&&k==='z')return true;
+  if(keys.includes('R')&&!e.ctrlKey&&!e.metaKey&&k==='r')return true;
+  if(keys.includes('Delete')&&k==='delete')return true;
+  if(keys.includes('←')&&k==='arrowleft')return true;
+  if(keys.includes('→')&&k==='arrowright')return true;
+  return false;
+}
+
+function shortcutLabel(action){
+  return (SHORTCUTS[action]||[]).join(' / ');
+}
+
 function showToast(msg){
   const t=document.createElement('div');t.className='toast';t.textContent=msg;
   document.body.appendChild(t);setTimeout(()=>t.remove(),2100);
@@ -802,7 +825,7 @@ function openEditor(idx){
           <canvas id="editorOverlay"></canvas>
         </div>
       </div>
-      <div class="editor-hint">Arraste para censurar &middot; <kbd>Ctrl+Z</kbd> desfazer &middot; <kbd>R</kbd> girar &middot; <kbd>Del</kbd> excluir página &middot; <kbd>←</kbd> <kbd>→</kbd> navegar páginas</div>
+      <div class="editor-hint">Arraste para censurar &middot; <kbd>${shortcutLabel('undo')}</kbd> desfazer &middot; <kbd>${shortcutLabel('rotate')}</kbd> girar &middot; <kbd>${shortcutLabel('deletePage')}</kbd> excluir página &middot; <kbd>${shortcutLabel('prevPage')}</kbd> <kbd>${shortcutLabel('nextPage')}</kbd> navegar páginas</div>
     </div>
   `;
 
@@ -1000,11 +1023,11 @@ function wireEditor(){
   document.getElementById('editorClose').addEventListener('click',()=>{closeEditor();});
 
   function onKey(e){
-    if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
-    else if(e.key==='ArrowLeft'){e.preventDefault();nav(state.editorIdx-1);}
-    else if(e.key==='ArrowRight'){e.preventDefault();nav(state.editorIdx+1);}
-    else if(!e.ctrlKey&&!e.metaKey&&e.key.toLowerCase()==='r'){e.preventDefault();rotateCurrentPage();}
-    else if(e.key==='Delete'){e.preventDefault();deleteCurrentPage();}
+    if(matchesShortcut(e,SHORTCUTS.undo)){e.preventDefault();undo();}
+    else if(matchesShortcut(e,SHORTCUTS.prevPage)){e.preventDefault();nav(state.editorIdx-1);}
+    else if(matchesShortcut(e,SHORTCUTS.nextPage)){e.preventDefault();nav(state.editorIdx+1);}
+    else if(matchesShortcut(e,SHORTCUTS.rotate)){e.preventDefault();rotateCurrentPage();}
+    else if(matchesShortcut(e,SHORTCUTS.deletePage)){e.preventDefault();deleteCurrentPage();}
   }
   document.addEventListener('keydown',onKey);
   state.editorCleanup=()=>document.removeEventListener('keydown',onKey);
