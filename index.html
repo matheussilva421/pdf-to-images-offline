@@ -327,10 +327,21 @@
 
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-  @keyframes fadeInOut { 0%{opacity:0;transform:translateY(-8px)} 15%{opacity:1;transform:translateY(0)} 85%{opacity:1} 100%{opacity:0;transform:translateY(-8px)} }
+  @keyframes fadeInOut { 0%{opacity:0;transform:translateY(-8px)} 10%{opacity:1;transform:translateY(0)} 85%{opacity:1} 100%{opacity:0;transform:translateY(-8px)} }
 
-  .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#2d6a5a;color:white;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;animation:fadeInOut 2s ease forwards;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+  .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#2d6a5a;color:white;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;animation:fadeInOut 2.8s ease forwards;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.2)}
 
+  .editor-zoom-controls{display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-muted);font-weight:600}
+  .editor-zoom-btn{width:28px;height:28px;border:1.5px solid var(--border);border-radius:6px;background:var(--card);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text-muted);transition:all 0.2s}
+  .editor-zoom-btn:hover{border-color:var(--accent);color:var(--accent)}
+  [data-theme="dark"] .editor-zoom-btn{background:var(--card)}
+
+  @media(max-width:900px){
+    .container{padding:24px 16px}
+    .setup-card{padding:24px 20px}
+    .page-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+    .editor-tools,.editor-actions{flex-wrap:wrap}
+  }
   @media(max-width:600px){
     .app-header{padding:12px 16px;gap:8px}
     .app-header h1{font-size:15px}
@@ -348,12 +359,13 @@
     .dropzone{padding:24px 16px}
     .scale-options{gap:6px}
     .scale-btn{padding:6px 12px;font-size:12px}
+    .editor-canvas-wrap{max-height:60vh}
   }
 </style>
 </head>
 <body>
 
-<div class="app-header">
+<header class="app-header" role="banner">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
     <polyline points="14 2 14 8 20 8"/>
@@ -363,10 +375,10 @@
   </svg>
   <h1>PDF &rarr; Imagens<span>com barra de Evento</span></h1>
   <div class="offline-badge"><span class="offline-dot"></span>100% OFFLINE</div>
-  <button id="darkModeToggle" style="background:rgba(255,255,255,0.15);border:none;color:white;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:16px;margin-left:8px" title="Alternar modo escuro">🌙</button>
-</div>
+  <button id="darkModeToggle" style="background:rgba(255,255,255,0.15);border:none;color:white;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:16px;margin-left:8px" title="Alternar modo escuro" aria-label="Alternar modo escuro">🌙</button>
+</header>
 
-<div class="container" id="app"></div>
+<main class="container" id="app" role="main"></main>
 
 <script>
 // === JSZIP ===
@@ -418,6 +430,7 @@ const workerCode = '/**\n * @licstart The following is the entire license notice
 const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
 const workerBlobUrl = URL.createObjectURL(workerBlob);
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerBlobUrl;
+window.addEventListener('beforeunload',()=>URL.revokeObjectURL(workerBlobUrl));
 
 const app = document.getElementById('app');
 
@@ -438,16 +451,21 @@ let state = {
   editorTool: 'black',
   editorHistory: [],
   editorCleanup: null,
+  editorDirty: false,
   previewUrls: [],
   visibleResults: 30,
   fileBuffer: null,
+  fileSize: 0,
+  loadingPdf: false,
+  cancelRequested: false,
+  mergeProgress: 0,
   pageFrom: '',
   pageTo: '',
 };
 
 function showToast(msg){
   const t=document.createElement('div');t.className='toast';t.textContent=msg;
-  document.body.appendChild(t);setTimeout(()=>t.remove(),2100);
+  document.body.appendChild(t);setTimeout(()=>t.remove(),3000);
 }
 
 function releasePreviewUrls() {
@@ -497,6 +515,16 @@ async function ensurePreviewUrls(limit = state.results.length) {
 
 async function render() {
   if (state.editorOpen) return;
+  // Fast-path: only update progress bar during conversion (avoid full DOM rebuild)
+  if (state.converting) {
+    const progressFill = document.querySelector('.progress-bar-fill');
+    const progressText = document.querySelector('.progress-text');
+    if (progressFill && progressText) {
+      progressFill.style.width = state.progress + '%';
+      progressText.textContent = state.progressText;
+      return;
+    }
+  }
   if (!state.converting) await ensurePreviewUrls(state.visibleResults);
   app.innerHTML = `
     <div class="setup-card">
@@ -518,8 +546,8 @@ async function render() {
         <div class="dropzone ${state.file ? 'has-file' : ''}" id="dropzone">
           <input type="file" accept=".pdf" id="fileInput" />
           ${state.file ? `
-            <p class="filename">📄 ${state.fileName}</p>
-            <p class="fileinfo">${state.filePages > 0 ? state.filePages + ' página(s)' : 'Lendo...'}</p>
+            <p class="filename">📄 ${state.fileName} <span style="color:var(--text-muted);font-size:12px">(${formatFileSize(state.fileSize||0)})</span></p>
+            <p class="fileinfo">${state.loadingPdf?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite;vertical-align:middle"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Carregando PDF...':state.filePages > 0 ? state.filePages + ' página(s)' : 'Lendo...'}</p>
           ` : `
             <div class="dropzone-icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M24 32V16m0 0l-8 8m8-8l8 8"/><path d="M40 32v6a4 4 0 01-4 4H12a4 4 0 01-4-4v-6"/></svg></div>
             <p>Clique ou arraste um arquivo PDF aqui</p>
@@ -547,7 +575,7 @@ async function render() {
       <button class="convert-btn" id="convertBtn" ${(!state.file||!state.eventoNum||state.converting)?'disabled':''}>
         ${state.converting?`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4m-3.5-7.5l-2.8 2.8m-5.4 5.4l-2.8 2.8m0-11l2.8 2.8m5.4 5.4l2.8 2.8"/></svg> Convertendo...`:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> Converter para Imagens`}
       </button>
-      ${state.converting?`<div class="progress-section"><div class="progress-bar-track"><div class="progress-bar-fill" style="width:${state.progress}%"></div></div><p class="progress-text">${state.progressText}</p></div>`:''}
+      ${state.converting?`<div class="progress-section"><div class="progress-bar-track"><div class="progress-bar-fill" style="width:${state.progress}%"></div></div><p class="progress-text">${state.progressText}</p><button class="convert-btn" id="cancelBtn" style="background:#b04141;margin-top:8px;padding:8px 20px;font-size:13px">Cancelar</button></div>`:''}
     </div>
     ${(!state.converting && state.results.length>0)?`
       <div class="results-section">
@@ -555,7 +583,7 @@ async function render() {
           <h2>✅ ${state.results.length} imagem(ns) gerada(s)</h2>
           <div class="results-actions">
             <button class="download-all-btn" id="mergePairsBtn" ${state.results.length<2||state.zipping||state.merging?'disabled':''}>
-              ${state.merging?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Juntando...`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M10 12h4"/></svg> Juntar 2 em 1`}
+              ${state.merging?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Juntando... ${state.mergeProgress||0}%`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M10 12h4"/></svg> Juntar 2 em 1`}
             </button>
             <button class="download-all-btn" id="downloadAllBtn" ${state.zipping||state.merging?'disabled':''}>
               ${state.zipping?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Compactando...`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/><line x1="5" y1="21" x2="19" y2="21"/></svg> Baixar todas (.zip)`}
@@ -574,9 +602,10 @@ async function render() {
               <div class="page-card-footer">
                 <span>Evento ${state.eventoNum} — Página ${r.pageNum}</span>
                 <div class="page-card-actions">
-                  <button class="page-download-btn" data-idx="${i}" data-fmt="png"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
-                  <button class="page-download-btn" data-idx="${i}" data-fmt="jpg"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> JPG</button>
-                  <button class="page-download-btn page-delete-btn" data-delete-idx="${i}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg> Excluir</button>
+                  <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
+                  <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
+                  <button class="page-download-btn" data-idx="${i}" data-fmt="jpg" aria-label="Baixar página ${r.pageNum} como JPG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> JPG</button>
+                  <button class="page-download-btn page-delete-btn" data-delete-idx="${i}" aria-label="Excluir página ${r.pageNum}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg> Excluir</button>
                 </div>
               </div>
             </div>
@@ -613,6 +642,7 @@ function bindEvents() {
   const pf=document.getElementById('pageFromInput');if(pf)pf.addEventListener('input',e=>{state.pageFrom=e.target.value;});
   const pt=document.getElementById('pageToInput');if(pt)pt.addEventListener('input',e=>{state.pageTo=e.target.value;});
   const cb=document.getElementById('convertBtn');if(cb)cb.addEventListener('click',startConversion);
+  const cancelBtn=document.getElementById('cancelBtn');if(cancelBtn)cancelBtn.addEventListener('click',()=>{state.cancelRequested=true;});
   const mp=document.getElementById('mergePairsBtn');if(mp)mp.addEventListener('click',mergeResultsInPairs);
   const da=document.getElementById('downloadAllBtn');if(da)da.addEventListener('click',downloadAllZip);
   const lm=document.getElementById('loadMoreBtn');if(lm)lm.addEventListener('click',()=>{state.visibleResults+=30;render();});
@@ -632,14 +662,23 @@ function deleteResultAt(idx){
   render();
 }
 
+function formatFileSize(bytes){
+  if(bytes<1024)return bytes+' B';
+  if(bytes<1048576)return (bytes/1024).toFixed(1)+' KB';
+  return (bytes/1048576).toFixed(1)+' MB';
+}
+
 async function handleFileObj(file){
   if(file.type!=='application/pdf'){alert('Selecione um arquivo PDF.');return;}
   releasePreviewUrls();
-  state.file=file;state.fileName=file.name;state.filePages=0;state.results=[];state.visibleResults=30;state.fileBuffer=null;render();
-  const ab=await file.arrayBuffer();
-  state.fileBuffer=ab;
-  const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
-  state.filePages=pdf.numPages;render();
+  state.file=file;state.fileName=file.name;state.fileSize=file.size;state.filePages=0;state.results=[];state.visibleResults=30;state.fileBuffer=null;state.loadingPdf=true;render();
+  try{
+    const ab=await file.arrayBuffer();
+    state.fileBuffer=ab;
+    const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
+    state.filePages=pdf.numPages;
+  }catch(err){console.error(err);alert('Erro ao ler o PDF: '+err.message);}
+  state.loadingPdf=false;render();
 }
 
 function drawBar(ctx,width,barH,eventoNum,pageNum){
@@ -655,27 +694,35 @@ function drawBar(ctx,width,barH,eventoNum,pageNum){
 }
 
 async function startConversion(){
+  const evNum=parseInt(state.eventoNum);
+  if(!evNum||evNum<1){alert('Informe um número de evento válido (maior que 0).');return;}
+  if(!state.file){alert('Selecione um arquivo PDF.');return;}
   releasePreviewUrls();
+  state.cancelRequested=false;
   state.converting=true;state.progress=0;state.results=[];state.visibleResults=30;render();
   try{
     const ab=state.fileBuffer||await state.file.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;const total=pdf.numPages;
     const fromPage=Math.max(1,Math.min(total,parseInt(state.pageFrom)||1));
     const toPage=Math.max(fromPage,Math.min(total,parseInt(state.pageTo)||total));
     const rangeTotal=toPage-fromPage+1;
+    const pdfC=document.createElement('canvas');
+    const fc=document.createElement('canvas');
     for(let i=fromPage;i<=toPage;i++){
+      if(state.cancelRequested){state.progressText='Conversão cancelada.';state.converting=false;render();pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;return;}
       const step=i-fromPage+1;
       state.progressText=`Processando página ${step} de ${rangeTotal} (pg. ${i})...`;state.progress=Math.round(((step-1)/rangeTotal)*100);render();
       const page=await pdf.getPage(i);const vp=page.getViewport({scale:state.scale});
-      const pdfC=document.createElement('canvas');pdfC.width=vp.width;pdfC.height=vp.height;
+      pdfC.width=vp.width;pdfC.height=vp.height;
       await page.render({canvasContext:pdfC.getContext('2d'),viewport:vp}).promise;
-      const barH=Math.max(Math.round(vp.width*0.045),32);const fc=document.createElement('canvas');fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
+      const barH=Math.max(Math.round(vp.width*0.045),32);fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
       drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
       const imageBlob=await canvasToBlobSafe(fc,'image/png');
       state.results.push({imageBlob,pageNum:i,edited:false});
-      pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
       await new Promise(requestAnimationFrame);
     }
+    pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
     state.progress=100;state.progressText='Concluído!';state.converting=false;render();
+    setTimeout(()=>{const rs=document.querySelector('.results-section');if(rs)rs.scrollIntoView({behavior:'smooth',block:'start'});},100);
   }catch(err){console.error(err);alert('Erro: '+err.message);state.converting=false;render();}
 }
 
@@ -691,36 +738,40 @@ async function loadImageFromBlob(blob){
 
 async function mergeResultsInPairs(){
   if(state.results.length<2){alert('Você precisa de pelo menos 2 imagens para juntar.');return;}
-  if(!confirm('Juntar as imagens de 2 em 2 lado a lado?')) return;
+  if(!confirm('Juntar as imagens de 2 em 2 lado a lado?\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.')) return;
   state.merging=true;
+  state.mergeProgress=0;
   render();
   try{
     const merged=[];
+    const totalPairs=Math.ceil(state.results.length/2);
+    const mergeCanvas=document.createElement('canvas');
     for(let i=0;i<state.results.length;i+=2){
       const first=state.results[i];
       const second=state.results[i+1];
       if(!second){
         merged.push({...first});
+        state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
         continue;
       }
       const [imgA,imgB]=await Promise.all([loadImageFromBlob(first.imageBlob),loadImageFromBlob(second.imageBlob)]);
-      const canvas=document.createElement('canvas');
-      canvas.width=imgA.naturalWidth+imgB.naturalWidth;
-      canvas.height=Math.max(imgA.naturalHeight,imgB.naturalHeight);
-      const ctx=canvas.getContext('2d');
+      mergeCanvas.width=imgA.naturalWidth+imgB.naturalWidth;
+      mergeCanvas.height=Math.max(imgA.naturalHeight,imgB.naturalHeight);
+      const ctx=mergeCanvas.getContext('2d');
       ctx.fillStyle='#ffffff';
-      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillRect(0,0,mergeCanvas.width,mergeCanvas.height);
       ctx.drawImage(imgA,0,0);
       ctx.drawImage(imgB,imgA.naturalWidth,0);
-      const imageBlob=await canvasToBlobSafe(canvas,'image/png');
+      const imageBlob=await canvasToBlobSafe(mergeCanvas,'image/png');
       merged.push({
         imageBlob,
         pageNum:`${first.pageNum}-${second.pageNum}`,
         edited:first.edited||second.edited,
       });
-      canvas.width=0;
-      canvas.height=0;
+      state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
+      await new Promise(requestAnimationFrame);
     }
+    mergeCanvas.width=0;mergeCanvas.height=0;
     releasePreviewUrls();
     state.results=merged;
     state.visibleResults=30;
@@ -754,11 +805,11 @@ function openEditor(idx){
           Voltar
         </button>
         <div class="editor-nav">
-          <button class="editor-nav-btn" id="editorPrev" ${idx<=0?'disabled':''}>
+          <button class="editor-nav-btn" id="editorPrev" ${idx<=0?'disabled':''} aria-label="Página anterior">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <span class="editor-nav-label" id="editorNavLabel">Página ${result.pageNum} de ${total}</span>
-          <button class="editor-nav-btn" id="editorNext" ${idx>=total-1?'disabled':''}>
+          <button class="editor-nav-btn" id="editorNext" ${idx>=total-1?'disabled':''} aria-label="Próxima página">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
@@ -795,9 +846,16 @@ function openEditor(idx){
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
             Excluir página
           </button>
-        </div>      </div>
+        </div>
+        <div class="editor-zoom-controls">
+          <button class="editor-zoom-btn" id="editorZoomOut" aria-label="Diminuir zoom">−</button>
+          <span id="editorZoomLevel">100%</span>
+          <button class="editor-zoom-btn" id="editorZoomIn" aria-label="Aumentar zoom">+</button>
+          <button class="editor-zoom-btn" id="editorZoomReset" aria-label="Resetar zoom" style="font-size:11px;width:auto;padding:0 6px">Fit</button>
+        </div>
+      </div>
       <div class="editor-canvas-wrap" id="editorWrap">
-        <div class="editor-canvas-inner">
+        <div class="editor-canvas-inner" id="editorCanvasInner">
           <canvas id="editorCanvas"></canvas>
           <canvas id="editorOverlay"></canvas>
         </div>
@@ -819,6 +877,7 @@ function openEditor(idx){
 async function loadPage(idx){
   state.editorIdx=idx;
   state.editorHistory=[];
+  state.editorDirty=false;
   const result=state.results[idx];
   const canvas=document.getElementById('editorCanvas');
   const overlay=document.getElementById('editorOverlay');
@@ -844,12 +903,14 @@ async function loadPage(idx){
 async function commitPage(){
   const canvas=document.getElementById('editorCanvas');
   if(!canvas)return;
+  if(!state.editorDirty)return;
   const idx=state.editorIdx;
   const result=state.results[idx];
   result.imageBlob=await canvasToBlobSafe(canvas,'image/png');
   await refreshPreviewUrl(idx);
   if(!state.editorOpen) render();
-  if(state.editorHistory.length>1) state.results[idx].edited=true;
+  state.results[idx].edited=true;
+  state.editorDirty=false;
 }
 
 function wireEditor(){
@@ -860,7 +921,8 @@ function wireEditor(){
     const c=document.getElementById('editorCanvas');
     const ctx=c.getContext('2d');
     state.editorHistory.push(ctx.getImageData(0,0,c.width,c.height));
-    if(state.editorHistory.length>30)state.editorHistory.splice(1,1);
+    if(state.editorHistory.length>10)state.editorHistory.splice(1,1);
+    state.editorDirty=true;
   }
 
   function rotateCurrentPage(){
@@ -946,6 +1008,7 @@ function wireEditor(){
     if(state.editorHistory.length<=1)return;
     state.editorHistory.pop();
     document.getElementById('editorCanvas').getContext('2d').putImageData(state.editorHistory[state.editorHistory.length-1],0,0);
+    state.editorDirty=true;
   }
 
   async function deleteCurrentPage(){
@@ -973,6 +1036,7 @@ function wireEditor(){
     if(state.editorHistory.length<=1)return;
     const first=state.editorHistory[0];state.editorHistory=[first];
     document.getElementById('editorCanvas').getContext('2d').putImageData(first,0,0);
+    state.editorDirty=true;
   });
 
   async function nav(newIdx){
@@ -1008,6 +1072,20 @@ function wireEditor(){
     else if(!e.ctrlKey&&!e.metaKey&&e.key.toLowerCase()==='r'){e.preventDefault();rotateCurrentPage();}
   }
   document.addEventListener('keydown',onKey);
+
+  // Zoom controls
+  let editorZoom=100;
+  function applyZoom(){
+    const inner=document.getElementById('editorCanvasInner');
+    if(inner)inner.style.transform=`scale(${editorZoom/100})`;
+    if(inner)inner.style.transformOrigin='top center';
+    const label=document.getElementById('editorZoomLevel');
+    if(label)label.textContent=editorZoom+'%';
+  }
+  document.getElementById('editorZoomIn').addEventListener('click',()=>{editorZoom=Math.min(300,editorZoom+25);applyZoom();});
+  document.getElementById('editorZoomOut').addEventListener('click',()=>{editorZoom=Math.max(25,editorZoom-25);applyZoom();});
+  document.getElementById('editorZoomReset').addEventListener('click',()=>{editorZoom=100;applyZoom();});
+
   state.editorCleanup=()=>document.removeEventListener('keydown',onKey);
 }
 
