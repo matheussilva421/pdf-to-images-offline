@@ -779,6 +779,10 @@ function openEditor(idx){
           </button>
         </div>
         <div class="editor-actions">
+          <button class="editor-action-btn" id="editorRotate">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 23 10"/></svg>
+            Girar 90°
+          </button>
           <button class="editor-action-btn" id="editorUndo">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
             Desfazer
@@ -798,7 +802,7 @@ function openEditor(idx){
           <canvas id="editorOverlay"></canvas>
         </div>
       </div>
-      <div class="editor-hint">Arraste para censurar &middot; <kbd>Ctrl+Z</kbd> desfazer &middot; <kbd>←</kbd> <kbd>→</kbd> navegar páginas</div>
+      <div class="editor-hint">Arraste para censurar &middot; <kbd>Ctrl+Z</kbd> desfazer &middot; <kbd>R</kbd> girar &middot; <kbd>←</kbd> <kbd>→</kbd> navegar páginas</div>
     </div>
   `;
 
@@ -852,6 +856,32 @@ function wireEditor(){
   const overlay=document.getElementById('editorOverlay');
   let drawing=false,startX=0,startY=0;
 
+  function snapshotCanvas(){
+    const c=document.getElementById('editorCanvas');
+    const ctx=c.getContext('2d');
+    state.editorHistory.push(ctx.getImageData(0,0,c.width,c.height));
+    if(state.editorHistory.length>30)state.editorHistory.splice(1,1);
+  }
+
+  function rotateCurrentPage(){
+    const canvas=document.getElementById('editorCanvas');
+    const rotated=document.createElement('canvas');
+    rotated.width=canvas.height;
+    rotated.height=canvas.width;
+    const rCtx=rotated.getContext('2d');
+    rCtx.translate(rotated.width,0);
+    rCtx.rotate(Math.PI/2);
+    rCtx.drawImage(canvas,0,0);
+    canvas.width=rotated.width;
+    canvas.height=rotated.height;
+    overlay.width=rotated.width;
+    overlay.height=rotated.height;
+    canvas.getContext('2d').drawImage(rotated,0,0);
+    rotated.width=0;
+    rotated.height=0;
+    snapshotCanvas();
+  }
+
   function coords(e){
     const rect=overlay.getBoundingClientRect();
     const sx=overlay.width/rect.width,sy=overlay.height/rect.height;
@@ -890,8 +920,7 @@ function wireEditor(){
     const c=document.getElementById('editorCanvas'),ctx=c.getContext('2d');
     if(state.editorTool==='black'){ctx.fillStyle='#000000';ctx.fillRect(x,y,w,h);}
     else{applyBlur(ctx,x,y,w,h,c.width,c.height);}
-    state.editorHistory.push(ctx.getImageData(0,0,c.width,c.height));
-    if(state.editorHistory.length>30)state.editorHistory.splice(1,1);
+    snapshotCanvas();
   }
 
   overlay.addEventListener('mousedown',down);
@@ -919,6 +948,7 @@ function wireEditor(){
     document.getElementById('editorCanvas').getContext('2d').putImageData(state.editorHistory[state.editorHistory.length-1],0,0);
   }
 
+  document.getElementById('editorRotate').addEventListener('click',()=>{rotateCurrentPage();});
   document.getElementById('editorUndo').addEventListener('click',undo);
   document.getElementById('editorReset').addEventListener('click',()=>{
     if(state.editorHistory.length<=1)return;
@@ -970,6 +1000,7 @@ function wireEditor(){
     if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
     else if(e.key==='ArrowLeft'){e.preventDefault();nav(state.editorIdx-1);}
     else if(e.key==='ArrowRight'){e.preventDefault();nav(state.editorIdx+1);}
+    else if(!e.ctrlKey&&!e.metaKey&&e.key.toLowerCase()==='r'){e.preventDefault();rotateCurrentPage();}
   }
   document.addEventListener('keydown',onKey);
   state.editorCleanup=()=>document.removeEventListener('keydown',onKey);
