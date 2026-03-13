@@ -462,8 +462,18 @@ let state = {
   loadingPdf: false,
   cancelRequested: false,
   mergeProgress: 0,
+  autoRedacting: false,
+  autoRedactProgress: 0,
   pageFrom: '',
   pageTo: '',
+};
+
+const LGPD_PATTERNS = {
+  cpf: /\b\d{3}[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{2}\b/,
+  cnpj: /\b\d{2}[\s.-]?\d{3}[\s.-]?\d{3}[\/]?\d{4}[\s.-]?\d{2}\b/,
+  email: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  phone: /\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d{4,5}[\s.-]?\d{4}\b/,
+  rg: /\b\d{1,2}[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?[0-9Xx]\b/
 };
 
 function showToast(msg){
@@ -585,6 +595,9 @@ async function render() {
         <div class="results-header">
           <h2>✅ ${state.results.length} imagem(ns) gerada(s)</h2>
           <div class="results-actions">
+            <button class="download-all-btn" id="autoRedactAllBtn" ${state.autoRedacting||state.zipping||state.merging?'disabled':''}>
+              ${state.autoRedacting?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Censurando... ${state.autoRedactProgress||0}%`:`🕵️ Auto censura LGPD`}
+            </button>
             <button class="download-all-btn" id="mergePairsBtn" ${state.results.length<2||state.zipping||state.merging?'disabled':''}>
               ${state.merging?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Juntando... ${state.mergeProgress||0}%`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M10 12h4"/></svg> Juntar 2 em 1`}
             </button>
@@ -647,6 +660,7 @@ function bindEvents() {
   const cb=document.getElementById('convertBtn');if(cb)cb.addEventListener('click',startConversion);
   const cancelBtn=document.getElementById('cancelBtn');if(cancelBtn)cancelBtn.addEventListener('click',()=>{state.cancelRequested=true;});
   const mp=document.getElementById('mergePairsBtn');if(mp)mp.addEventListener('click',mergeResultsInPairs);
+  const ar=document.getElementById('autoRedactAllBtn');if(ar)ar.addEventListener('click',autoRedactAllPages);
   const da=document.getElementById('downloadAllBtn');if(da)da.addEventListener('click',downloadAllZip);
   const lm=document.getElementById('loadMoreBtn');if(lm)lm.addEventListener('click',()=>{state.visibleResults+=30;render();});
   document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx),btn.dataset.fmt||'png');});});
@@ -787,6 +801,100 @@ async function mergeResultsInPairs(){
   render();
 }
 
+async function ensureTesseractLoaded(){
+  if(window.Tesseract)return window.Tesseract;
+  const scriptUrl='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+  await new Promise((resolve,reject)=>{
+    const existing=[...document.querySelectorAll('script')].find(s=>s.src===scriptUrl);
+    if(existing){
+      existing.addEventListener('load',resolve,{once:true});
+      existing.addEventListener('error',()=>reject(new Error('Falha ao carregar OCR.')),{once:true});
+      if(window.Tesseract)resolve();
+      return;
+    }
+    const s=document.createElement('script');
+    s.src=scriptUrl;
+    s.async=true;
+    s.onload=resolve;
+    s.onerror=()=>reject(new Error('Falha ao carregar OCR. Verifique conexão para baixar o modelo.'));
+    document.head.appendChild(s);
+  });
+  if(!window.Tesseract)throw new Error('Biblioteca OCR indisponível.');
+  return window.Tesseract;
+}
+
+function isSensitiveToken(text){
+  if(!text)return false;
+  return Object.values(LGPD_PATTERNS).some(rx=>rx.test(text));
+}
+
+function collectSensitiveBoxes(words){
+  const boxes=[];
+  const flaggedKeywords=new Set(['cpf','cnpj','rg','telefone','celular','email','nascimento']);
+  for(let i=0;i<words.length;i++){
+    const w=words[i];
+    const txt=(w.text||'').trim();
+    const norm=txt.toLowerCase().replace(/[:]/g,'');
+    if(isSensitiveToken(txt)) boxes.push(w.bbox||w);
+    if(flaggedKeywords.has(norm)){
+      for(let j=i+1;j<=Math.min(i+3,words.length-1);j++) boxes.push(words[j].bbox||words[j]);
+    }
+  }
+  return boxes.filter(Boolean);
+}
+
+async function detectSensitiveDataBoxes(imageSource){
+  const Tesseract=await ensureTesseractLoaded();
+  const {data}=await Tesseract.recognize(imageSource,'por+eng');
+  return collectSensitiveBoxes(data?.words||[]);
+}
+
+function applyRedactionBoxes(ctx,boxes,tool='black'){
+  const pad=6;
+  for(const b of boxes){
+    const x=Math.max(0,Math.round((b.x0??b.x)-pad));
+    const y=Math.max(0,Math.round((b.y0??b.y)-pad));
+    const x1=Math.round((b.x1??((b.x||0)+(b.w||0)))+pad);
+    const y1=Math.round((b.y1??((b.y||0)+(b.h||0)))+pad);
+    const w=Math.max(1,x1-x);
+    const h=Math.max(1,y1-y);
+    if(tool==='blur') applyBlur(ctx,x,y,w,h,ctx.canvas.width,ctx.canvas.height);
+    else {ctx.fillStyle='#000000';ctx.fillRect(x,y,w,h);}
+  }
+}
+
+async function autoRedactAllPages(){
+  if(!state.results.length||state.autoRedacting)return;
+  if(!confirm('Aplicar censura automática LGPD em todas as páginas?'))return;
+  state.autoRedacting=true;state.autoRedactProgress=0;render();
+  try{
+    for(let i=0;i<state.results.length;i++){
+      const r=state.results[i];
+      if(!r?.imageBlob)continue;
+      const url=URL.createObjectURL(r.imageBlob);
+      const img=await new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(new Error('Falha ao carregar página para OCR.'));im.src=url;}).finally(()=>URL.revokeObjectURL(url));
+      const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+      const ctx=c.getContext('2d');ctx.drawImage(img,0,0);
+      const boxes=await detectSensitiveDataBoxes(c);
+      if(boxes.length){
+        applyRedactionBoxes(ctx,boxes,'black');
+        r.imageBlob=await canvasToBlobSafe(c,'image/png');
+        r.edited=true;
+      }
+      c.width=0;c.height=0;
+      await refreshPreviewUrl(i);
+      state.autoRedactProgress=Math.round(((i+1)/state.results.length)*100);
+      render();
+    }
+    showToast('Censura automática finalizada. Revise as páginas antes de exportar.');
+  }catch(err){
+    console.error(err);
+    alert('Erro na censura automática: '+err.message);
+  }
+  state.autoRedacting=false;
+  render();
+}
+
 // ══════════════════════════════
 // EDITOR with continuous nav
 // ══════════════════════════════
@@ -833,6 +941,10 @@ function openEditor(idx){
           </button>
         </div>
         <div class="editor-actions">
+          <button class="editor-action-btn" id="editorAutoRedact">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3l8 4v6c0 5-3.5 7.5-8 8-4.5-.5-8-3-8-8V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+            Auto LGPD
+          </button>
           <button class="editor-action-btn" id="editorRotate">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15A9 9 0 1 1 23 10"/></svg>
             Girar 90°
@@ -1034,6 +1146,27 @@ function wireEditor(){
   }
 
   document.getElementById('editorRotate').addEventListener('click',()=>{rotateCurrentPage();});
+  document.getElementById('editorAutoRedact').addEventListener('click',async()=>{
+    const btn=document.getElementById('editorAutoRedact');
+    const canvas=document.getElementById('editorCanvas');
+    if(!btn||!canvas)return;
+    const original=btn.innerHTML;
+    btn.disabled=true;
+    btn.innerHTML='⏳ Analisando...';
+    try{
+      const boxes=await detectSensitiveDataBoxes(canvas);
+      if(!boxes.length){showToast('Nenhum padrão sensível detectado automaticamente nesta página.');return;}
+      applyRedactionBoxes(canvas.getContext('2d'),boxes,state.editorTool);
+      snapshotCanvas();
+      showToast(`Auto censura aplicada em ${boxes.length} região(ões).`);
+    }catch(err){
+      console.error(err);
+      alert('Erro na auto censura: '+err.message);
+    }finally{
+      btn.disabled=false;
+      btn.innerHTML=original;
+    }
+  });
   document.getElementById('editorUndo').addEventListener('click',undo);
   document.getElementById('editorReset').addEventListener('click',()=>{
     if(state.editorHistory.length<=1)return;
