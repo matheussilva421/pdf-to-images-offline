@@ -797,8 +797,6 @@ function bindEvents() {
 function deleteResultAt(idx){
   const result=state.results[idx];
   if(!result)return;
-  const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
-  if(!ok)return;
   if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
   state.results.splice(idx,1);
   state.previewUrls.splice(idx,1);
@@ -1160,8 +1158,6 @@ function wireEditor(){
     const idx=state.editorIdx;
     const result=state.results[idx];
     if(!result)return;
-    const ok=confirm(`Excluir a página ${result.pageNum}? A numeração original será mantida.`);
-    if(!ok)return;
     if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
     state.results.splice(idx,1);
     state.previewUrls.splice(idx,1);
