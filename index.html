@@ -30,6 +30,7 @@
   [data-theme="dark"] .scale-btn{background:var(--card)}
   [data-theme="dark"] .editor-tool-btn{background:var(--card)}
   [data-theme="dark"] .editor-action-btn{background:var(--card)}
+  [data-theme="dark"] .editor-doctype-input{background:var(--card);border-color:var(--border)}
   [data-theme="dark"] .page-download-btn{background:var(--card)}
   [data-theme="dark"] .download-all-btn{background:var(--card)}
   [data-theme="dark"] input[type="number"]{background:var(--card);color:var(--text)}
@@ -215,11 +216,20 @@
   .page-card-actions { display: flex; align-items: center; gap: 8px; }
 
   .doc-type-select {
-    font-size: 12px; padding: 3px 6px; border-radius: 5px;
+    font-size: 12px; padding: 3px 6px; border-radius: 5px; width: 130px;
     border: 1.5px solid var(--border); background: var(--bg); color: var(--text);
     font-family: inherit; font-weight: 600; cursor: pointer; transition: border-color 0.2s;
   }
+  .doc-type-select:focus { border-color: var(--accent); outline: none; }
   .doc-type-select:hover { border-color: var(--accent); }
+  .editor-doctype { display: flex; align-items: center; gap: 6px; }
+  .editor-doctype label { font-size: 13px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+  .editor-doctype-input {
+    font-size: 13px; padding: 6px 10px; border-radius: 8px; width: 170px;
+    border: 2px solid var(--border); background: white; color: var(--text);
+    font-family: inherit; font-weight: 600; transition: border-color 0.2s;
+  }
+  .editor-doctype-input:focus { border-color: var(--accent); outline: none; }
 
   .preview-bar {
     background: var(--green-bar); padding: 6px 14px;
@@ -723,7 +733,7 @@ async function render() {
               </div>
               <div class="page-card-footer">
                 <span>Evento ${state.eventoNum} — Pg. ${r.pageNum}</span>
-                <select class="doc-type-select" data-type-idx="${i}">${DOC_TYPES.map(t=>`<option value="${t}"${r.docType===t?' selected':''}>${t}</option>`).join('')}</select>
+                <input list="dtl${i}" class="doc-type-select" data-type-idx="${i}" value="${r.docType}" autocomplete="off"/><datalist id="dtl${i}">${DOC_TYPES.map(t=>`<option value="${t}">`).join('')}</datalist>
                 <div class="page-card-actions">
                   <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
                   <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
@@ -805,7 +815,7 @@ function bindEvents() {
   document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx),btn.dataset.fmt||'png');});});
   document.querySelectorAll('.page-delete-btn[data-delete-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();deleteResultAt(parseInt(btn.dataset.deleteIdx));});});
   document.querySelectorAll('.page-card-img[data-edit]').forEach(el=>{el.addEventListener('click',()=>openEditor(parseInt(el.dataset.edit)));});
-  document.querySelectorAll('.doc-type-select[data-type-idx]').forEach(sel=>{sel.addEventListener('change',e=>{e.stopPropagation();updateDocType(parseInt(sel.dataset.typeIdx),sel.value);});});
+  document.querySelectorAll('.doc-type-select[data-type-idx]').forEach(inp=>{const handler=()=>{const v=inp.value.trim();if(v)updateDocType(parseInt(inp.dataset.typeIdx),v);};inp.addEventListener('change',e=>{e.stopPropagation();handler();});inp.addEventListener('blur',e=>{e.stopPropagation();handler();});});
 }
 
 async function updateDocType(idx,newType){
@@ -1054,6 +1064,11 @@ function openEditor(idx){
             Excluir página
           </button>
         </div>
+        <div class="editor-doctype">
+          <label for="editorDocType">Tipo:</label>
+          <input list="editorDoctypeList" id="editorDocType" class="editor-doctype-input" value="${result.docType}" autocomplete="off"/>
+          <datalist id="editorDoctypeList">${DOC_TYPES.map(t=>`<option value="${t}">`).join('')}</datalist>
+        </div>
         <div class="editor-zoom-controls">
           <button class="editor-zoom-btn" id="editorZoomOut" aria-label="Diminuir zoom">−</button>
           <span id="editorZoomLevel">100%</span>
@@ -1104,6 +1119,7 @@ async function loadPage(idx){
   document.getElementById('editorNavLabel').textContent=`Página ${result.pageNum} de ${total}`;
   document.getElementById('editorPrev').disabled=idx<=0;
   document.getElementById('editorNext').disabled=idx>=total-1;
+  const dtInp=document.getElementById('editorDocType');if(dtInp)dtInp.value=result.docType||'Outros';
   document.getElementById('editorWrap').scrollTop=0;
 }
 
@@ -1245,6 +1261,14 @@ function wireEditor(){
     document.getElementById('editorCanvas').getContext('2d').putImageData(first,0,0);
     state.editorDirty=true;
   });
+
+  const doctypeInput=document.getElementById('editorDocType');
+  if(doctypeInput){
+    let lastVal=doctypeInput.value;
+    const applyDocType=()=>{const v=doctypeInput.value.trim();if(v&&v!==lastVal){lastVal=v;updateDocType(state.editorIdx,v);}};
+    doctypeInput.addEventListener('change',applyDocType);
+    doctypeInput.addEventListener('blur',applyDocType);
+  }
 
   async function nav(newIdx){
     if(newIdx<0||newIdx>=state.results.length)return;
