@@ -973,6 +973,7 @@ async function mergeResultsInPairs(){
         imageBlob,
         pageNum:`${first.pageNum}-${second.pageNum}`,
         edited:first.edited||second.edited,
+        docType:first.docType===second.docType?first.docType:`${first.docType}/${second.docType}`,
       });
       state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
       await new Promise(requestAnimationFrame);
