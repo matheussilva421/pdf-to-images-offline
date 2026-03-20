@@ -214,6 +214,13 @@
 
   .page-card-actions { display: flex; align-items: center; gap: 8px; }
 
+  .doc-type-select {
+    font-size: 12px; padding: 3px 6px; border-radius: 5px;
+    border: 1.5px solid var(--border); background: var(--bg); color: var(--text);
+    font-family: inherit; font-weight: 600; cursor: pointer; transition: border-color 0.2s;
+  }
+  .doc-type-select:hover { border-color: var(--accent); }
+
   .preview-bar {
     background: var(--green-bar); padding: 6px 14px;
     display: flex; align-items: center; gap: 8px; border-radius: 6px; margin-top: 12px;
@@ -223,6 +230,10 @@
   .preview-bar span { font-size: 13px; font-weight: 600; color: white; letter-spacing: 0.5px; }
   .page-num-center {
     position: absolute; left: 50%; transform: translateX(-50%);
+    font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.85); letter-spacing: 0.5px;
+  }
+  .doc-type-preview {
+    position: absolute; right: 14px;
     font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.85); letter-spacing: 0.5px;
   }
 
@@ -630,6 +641,7 @@ async function render() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           <span>EVENTO ${state.eventoNum}</span>
           <span class="page-num-center">PÁGINA: 1</span>
+          <span class="doc-type-preview">TIPO: —</span>
         </div>` : ''}
       </div>
       <div class="form-group">
@@ -710,7 +722,8 @@ async function render() {
                 ${r.edited?'<div class="edited-badge">Editado</div>':''}
               </div>
               <div class="page-card-footer">
-                <span>Evento ${state.eventoNum} — Página ${r.pageNum}</span>
+                <span>Evento ${state.eventoNum} — Pg. ${r.pageNum}</span>
+                <select class="doc-type-select" data-type-idx="${i}">${DOC_TYPES.map(t=>`<option value="${t}"${r.docType===t?' selected':''}>${t}</option>`).join('')}</select>
                 <div class="page-card-actions">
                   <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
                   <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
@@ -792,6 +805,26 @@ function bindEvents() {
   document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx),btn.dataset.fmt||'png');});});
   document.querySelectorAll('.page-delete-btn[data-delete-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();deleteResultAt(parseInt(btn.dataset.deleteIdx));});});
   document.querySelectorAll('.page-card-img[data-edit]').forEach(el=>{el.addEventListener('click',()=>openEditor(parseInt(el.dataset.edit)));});
+  document.querySelectorAll('.doc-type-select[data-type-idx]').forEach(sel=>{sel.addEventListener('change',e=>{e.stopPropagation();updateDocType(parseInt(sel.dataset.typeIdx),sel.value);});});
+}
+
+async function updateDocType(idx,newType){
+  const r=state.results[idx];if(!r)return;
+  r.docType=newType;
+  try{
+    const img=await loadImageFromBlob(r.imageBlob);
+    const w=img.width,barH=Math.max(Math.round(w*0.045),32);
+    const fc=document.createElement('canvas');fc.width=w;fc.height=img.height;
+    const ctx=fc.getContext('2d');
+    drawBar(ctx,w,barH,state.eventoNum,r.pageNum,newType);
+    ctx.drawImage(img,0,barH,w,img.height-barH,0,barH,w,img.height-barH);
+    const blob=await canvasToBlobSafe(fc,'image/png');
+    r.imageBlob=blob;
+    if(state.previewUrls[idx])URL.revokeObjectURL(state.previewUrls[idx]);
+    state.previewUrls[idx]=URL.createObjectURL(blob);
+    fc.width=0;fc.height=0;
+    render();
+  }catch(e){console.error('Erro ao atualizar tipo:',e);render();}
 }
 
 function deleteResultAt(idx){
@@ -822,7 +855,35 @@ async function handleFileObj(file){
   state.loadingPdf=false;render();
 }
 
-function drawBar(ctx,width,barH,eventoNum,pageNum){
+const DOC_TYPES=['CPF','RG','CNH','Título de Eleitor','Ficha Financeira','Contracheque','Portaria','Decreto','Ato','Certidão','Requerimento','Procuração','Comprovante','Outros'];
+
+const DOC_TYPE_RULES=[
+  {type:'CPF',patterns:[/cadastro\s+de\s+pessoas?\s+f[ií]sicas/i,/CPF[\s:]\s*\d/i,/\d{3}\.\d{3}\.\d{3}-\d{2}/]},
+  {type:'CNH',patterns:[/carteira\s+nacional\s+de\s+habilita[çc][ãa]o/i,/\bCNH\b/,/\bRENACH\b/i]},
+  {type:'Título de Eleitor',patterns:[/t[ií]tulo\s+de\s+eleitor/i,/t[ií]tulo\s+eleitoral/i,/zona\s+eleitoral/i,/se[çc][ãa]o\s+eleitoral/i]},
+  {type:'RG',patterns:[/registro\s+geral/i,/c[ée]dula\s+de\s+identidade/i,/\bRG[\s:]\s*\d/i,/\bSSP\b/,/carteira\s+de\s+identidade/i]},
+  {type:'Contracheque',patterns:[/contracheque/i,/contra-cheque/i,/holerite/i,/demonstrativo\s+de\s+pagamento/i,/sal[áa]rio\s+l[ií]quido/i,/vencimentos\s+.{0,30}descontos/i]},
+  {type:'Ficha Financeira',patterns:[/ficha\s+financeira/i,/ficha\s+funcional/i,/hist[óo]rico\s+financeiro/i]},
+  {type:'Portaria',patterns:[/portaria\s+(n[°º.]\s*\d|municipal|estadual)/i,/\bportaria\b/i]},
+  {type:'Decreto',patterns:[/decreto\s+(n[°º.]\s*\d|municipal|estadual|legislativo)/i,/\bdecreto\b/i]},
+  {type:'Ato',patterns:[/ato\s+(n[°º.]\s*\d|administrativo|normativo)/i]},
+  {type:'Certidão',patterns:[/certid[ãa]o/i,/certifico\s+e\s+dou\s+f[ée]/i]},
+  {type:'Requerimento',patterns:[/requerimento/i,/venho\s+.{0,20}requerer/i]},
+  {type:'Procuração',patterns:[/procura[çc][ãa]o/i,/outorgante/i,/outorgado/i,/substabelecer/i]},
+  {type:'Comprovante',patterns:[/comprovante/i,/\brecibo\b/i,/comprova[çc][ãa]o/i]},
+];
+
+function classifyDocument(text){
+  if(!text||!text.trim())return'Outros';
+  for(const rule of DOC_TYPE_RULES){
+    for(const pat of rule.patterns){
+      if(pat.test(text))return rule.type;
+    }
+  }
+  return'Outros';
+}
+
+function drawBar(ctx,width,barH,eventoNum,pageNum,docType){
   ctx.fillStyle='#4a8c7b';ctx.fillRect(0,0,width,barH);
   const iconSize=Math.round(barH*0.6),iconX=Math.round(barH*0.5),iconY=Math.round(barH/2),iconR=iconSize/2,lw=Math.max(2,iconSize*0.1);
   ctx.beginPath();ctx.arc(iconX,iconY,iconR,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=lw;ctx.stroke();
@@ -831,7 +892,9 @@ function drawBar(ctx,width,barH,eventoNum,pageNum){
   ctx.font=`700 ${fs}px -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`;ctx.fillStyle='white';ctx.textBaseline='middle';
   ctx.fillText(`EVENTO ${eventoNum}`,iconX+iconR+Math.round(barH*0.3),iconY+1);
   ctx.font=`600 ${fs}px -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='center';
-  ctx.fillText(`PÁGINA: ${pageNum}`,width/2,iconY+1);ctx.textAlign='left';
+  ctx.fillText(`PÁGINA: ${pageNum}`,width/2,iconY+1);
+  if(docType&&docType!=='Outros'){ctx.textAlign='right';ctx.fillText(`TIPO: ${docType.toUpperCase()}`,width-Math.round(barH*0.4),iconY+1);}
+  ctx.textAlign='left';
 }
 
 async function startConversion(){
@@ -853,12 +916,14 @@ async function startConversion(){
       const step=i-fromPage+1;
       state.progressText=`Processando página ${step} de ${rangeTotal} (pg. ${i})...`;state.progress=Math.round(((step-1)/rangeTotal)*100);render();
       const page=await pdf.getPage(i);const vp=page.getViewport({scale:state.scale});
+      let docType='Outros';
+      try{const tc=await page.getTextContent();const txt=tc.items.map(it=>it.str).join(' ');docType=classifyDocument(txt);}catch(e){console.warn('Texto não extraído da página '+i,e);}
       pdfC.width=vp.width;pdfC.height=vp.height;
       await page.render({canvasContext:pdfC.getContext('2d'),viewport:vp}).promise;
       const barH=Math.max(Math.round(vp.width*0.045),32);fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
-      drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
+      drawBar(ctx,vp.width,barH,state.eventoNum,i,docType);ctx.drawImage(pdfC,0,barH);
       const imageBlob=await canvasToBlobSafe(fc,'image/png');
-      state.results.push({imageBlob,pageNum:i,edited:false});
+      state.results.push({imageBlob,pageNum:i,edited:false,docType});
       await new Promise(requestAnimationFrame);
     }
     pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
