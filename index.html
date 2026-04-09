@@ -1269,7 +1269,16 @@ function wireEditor(){
     if(!result)return;
     result.pendingDelete=!result.pendingDelete;
     updateDeleteButtonLabel();
-    showToast(result.pendingDelete?'Página marcada para excluir (será removida ao juntar imagens).':'Exclusão desfeita para esta página.');
+    if(result.pendingDelete){
+      showToast('Página marcada para excluir (será removida ao juntar imagens).');
+      const nextIdx=idx+1;
+      if(nextIdx<state.results.length){
+        await commitPage();
+        await loadPage(nextIdx);
+      }
+      return;
+    }
+    showToast('Exclusão desfeita para esta página.');
   }
 
   document.getElementById('editorRotate').addEventListener('click',()=>{rotateCurrentPage();});
