@@ -197,6 +197,11 @@
     background: #e8a735; color: white; font-size: 11px; font-weight: 700;
     padding: 3px 10px; border-radius: 12px; letter-spacing: 0.3px;
   }
+  .pending-delete-badge {
+    position: absolute; top: 8px; left: 8px;
+    background: #b04141; color: white; font-size: 11px; font-weight: 700;
+    padding: 3px 10px; border-radius: 12px; letter-spacing: 0.3px;
+  }
 
   .page-card-footer {
     padding: 12px 16px; display: flex; align-items: center;
@@ -711,10 +716,11 @@ async function render() {
               <div class="page-card-img" data-edit="${i}">
                 <img src="${state.previewUrls[i]}" alt="Página ${r.pageNum}" loading="lazy"/>
                 <div class="page-card-overlay"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg><span>Editar</span></div>
+                ${r.pendingDelete?'<div class="pending-delete-badge">Marcada p/ excluir</div>':''}
                 ${r.edited?'<div class="edited-badge">Editado</div>':''}
               </div>
               <div class="page-card-footer">
-                <span>Evento ${state.eventoNum} — Página ${r.pageNum}</span>
+                <span>Evento ${state.eventoNum} — Página ${r.pageNum}${r.pendingDelete?' (marcada para excluir)':''}</span>
                 <div class="page-card-actions">
                   <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
                   <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
@@ -863,7 +869,7 @@ async function startConversion(){
       const barH=Math.max(Math.round(vp.width*0.045),32);fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
       drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
       const imageBlob=await canvasToBlobSafe(fc,'image/png');
-      state.results.push({imageBlob,pageNum:i,edited:false});
+      state.results.push({imageBlob,pageNum:i,edited:false,pendingDelete:false});
       await new Promise(requestAnimationFrame);
     }
     pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
@@ -882,8 +888,24 @@ async function loadImageFromBlob(blob){
   });
 }
 
+function applyPendingDeletionsBeforeMerge(){
+  const markedIdx=[];
+  for(let i=0;i<state.results.length;i++) if(state.results[i]?.pendingDelete) markedIdx.push(i);
+  if(markedIdx.length===0) return 0;
+  for(let i=markedIdx.length-1;i>=0;i--){
+    const idx=markedIdx[i];
+    if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
+    state.results.splice(idx,1);
+    state.previewUrls.splice(idx,1);
+  }
+  state.visibleResults=Math.min(state.visibleResults,state.results.length||30);
+  return markedIdx.length;
+}
+
 async function mergeResultsInPairs(){
-  if(state.results.length<2){alert('Você precisa de pelo menos 2 imagens para juntar.');return;}
+  const removedCount=applyPendingDeletionsBeforeMerge();
+  if(removedCount>0) showToast(`${removedCount} página(s) marcada(s) foram excluídas antes da junção.`);
+  if(state.results.length<2){alert('Você precisa de pelo menos 2 imagens para juntar após aplicar as exclusões marcadas.');render();return;}
   if(!confirm('Juntar as imagens de 2 em 2 lado a lado?\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.')) return;
   state.merging=true;
   state.mergeProgress=0;
@@ -933,7 +955,9 @@ async function mergeResultsInPairs(){
 }
 
 async function mergeResultsInTriplets(){
-  if(state.results.length<3){alert('Você precisa de pelo menos 3 imagens para juntar 3 em 1.');return;}
+  const removedCount=applyPendingDeletionsBeforeMerge();
+  if(removedCount>0) showToast(`${removedCount} página(s) marcada(s) foram excluídas antes da junção.`);
+  if(state.results.length<3){alert('Você precisa de pelo menos 3 imagens para juntar 3 em 1 após aplicar as exclusões marcadas.');render();return;}
   if(!confirm('Juntar as imagens de 3 em 3 lado a lado?\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.')) return;
   state.merging3=true;
   state.mergeProgress=0;
@@ -1060,7 +1084,7 @@ function openEditor(idx){
           </button>
           <button class="editor-action-btn danger" id="editorDelete">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-            Excluir página
+            <span id="editorDeleteLabel">${result.pendingDelete?'Desfazer exclusão':'Marcar para excluir'}</span>
           </button>
         </div>
         <div class="editor-zoom-controls">
@@ -1113,6 +1137,8 @@ async function loadPage(idx){
   document.getElementById('editorNavLabel').textContent=`Página ${result.pageNum} de ${total}`;
   document.getElementById('editorPrev').disabled=idx<=0;
   document.getElementById('editorNext').disabled=idx>=total-1;
+  const deleteLabel=document.getElementById('editorDeleteLabel');
+  if(deleteLabel) deleteLabel.textContent=result.pendingDelete?'Desfazer exclusão':'Marcar para excluir';
   document.getElementById('editorWrap').scrollTop=0;
 }
 
@@ -1132,6 +1158,14 @@ async function commitPage(){
 function wireEditor(){
   const overlay=document.getElementById('editorOverlay');
   let drawing=false,startX=0,startY=0;
+  const deleteBtn=document.getElementById('editorDelete');
+
+  function updateDeleteButtonLabel(){
+    const current=state.results[state.editorIdx];
+    const deleteLabel=document.getElementById('editorDeleteLabel');
+    if(!deleteBtn||!deleteLabel||!current)return;
+    deleteLabel.textContent=current.pendingDelete?'Desfazer exclusão':'Marcar para excluir';
+  }
 
   function snapshotCanvas(){
     const c=document.getElementById('editorCanvas');
@@ -1233,17 +1267,9 @@ function wireEditor(){
     const idx=state.editorIdx;
     const result=state.results[idx];
     if(!result)return;
-    if(state.previewUrls[idx]) URL.revokeObjectURL(state.previewUrls[idx]);
-    state.results.splice(idx,1);
-    state.previewUrls.splice(idx,1);
-    if(state.results.length===0){
-      if(state.editorCleanup){state.editorCleanup();state.editorCleanup=null;}
-      state.editorOpen=false;
-      render();
-      return;
-    }
-    const nextIdx=Math.min(idx,state.results.length-1);
-    await loadPage(nextIdx);
+    result.pendingDelete=!result.pendingDelete;
+    updateDeleteButtonLabel();
+    showToast(result.pendingDelete?'Página marcada para excluir (será removida ao juntar imagens).':'Exclusão desfeita para esta página.');
   }
 
   document.getElementById('editorRotate').addEventListener('click',()=>{rotateCurrentPage();});
@@ -1263,10 +1289,11 @@ function wireEditor(){
 
   document.getElementById('editorPrev').addEventListener('click',()=>{nav(state.editorIdx-1);});
   document.getElementById('editorNext').addEventListener('click',()=>{nav(state.editorIdx+1);});
+  updateDeleteButtonLabel();
   document.getElementById('editorDelete').addEventListener('click',()=>{
     deleteCurrentPage().catch(err=>{
       console.error(err);
-      alert('Erro ao carregar página: '+err.message);
+      alert('Erro ao alterar exclusão da página: '+err.message);
     });
   });
 
