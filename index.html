@@ -1434,6 +1434,25 @@ function getResultBaseName(result){
   return baseNameFromFileName(result?.fileName || 'arquivo');
 }
 
+function normalizePageKey(pageNum){
+  const raw=String(pageNum ?? '');
+  const parts=raw.split('-').map(part=>parseInt(part,10)).filter(Number.isFinite);
+  const first=parts.length?parts[0]:Number.MAX_SAFE_INTEGER;
+  return {first, raw};
+}
+
+function buildZipFileName(result){
+  const bn=getResultBaseName(result);
+  const eventoNum=parseInt(result?.eventoNum,10);
+  const evento=Number.isFinite(eventoNum)&&eventoNum>0?eventoNum:0;
+  const pageInfo=normalizePageKey(result?.pageNum);
+  const pageLabel=pageInfo.raw.split('-').map(part=>{
+    const n=parseInt(part,10);
+    return Number.isFinite(n)?String(n).padStart(4,'0'):part;
+  }).join('-');
+  return `${bn}_evento${String(evento).padStart(4,'0')}_pagina${pageLabel}.png`;
+}
+
 async function downloadOne(idx,fmt='png'){
   const r=state.results[idx];
   if(!r?.imageBlob){alert('Imagem indisponível para download.');return;}
@@ -1459,10 +1478,20 @@ async function downloadAllZip(){
   state.zipping=true;render();
   try{
     const zip=new JSZip();const folder=zip.folder(`imagens_eventos`);
-    for(const r of state.results){
+    const orderedResults=state.results.slice().sort((a,b)=>{
+      const eventA=parseInt(a?.eventoNum,10);
+      const eventB=parseInt(b?.eventoNum,10);
+      const safeEventA=Number.isFinite(eventA)&&eventA>0?eventA:Number.MAX_SAFE_INTEGER;
+      const safeEventB=Number.isFinite(eventB)&&eventB>0?eventB:Number.MAX_SAFE_INTEGER;
+      if(safeEventA!==safeEventB) return safeEventA-safeEventB;
+      const pageA=normalizePageKey(a?.pageNum);
+      const pageB=normalizePageKey(b?.pageNum);
+      if(pageA.first!==pageB.first) return pageA.first-pageB.first;
+      return pageA.raw.localeCompare(pageB.raw);
+    });
+    for(const r of orderedResults){
       if(!r.imageBlob) throw new Error(`Página ${r.pageNum} sem imagem válida para exportação.`);
-      const bn=getResultBaseName(r);
-      folder.file(`${bn}_evento${r.eventoNum}_pagina${r.pageNum}.png`,r.imageBlob);
+      folder.file(buildZipFileName(r),r.imageBlob);
     }
     const content=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
     const url=URL.createObjectURL(content);const a=document.createElement('a');a.href=url;
