@@ -103,6 +103,19 @@
   }
   .shortcut-action-btn:hover{border-color:var(--accent);color:var(--accent)}
   .shortcut-help{font-size:12px;color:var(--text-muted);margin-bottom:10px}
+  .job-list{display:flex;flex-direction:column;gap:10px}
+  .job-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.01);
+  }
+  .job-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .job-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .job-sub{font-size:12px;color:var(--text-muted)}
+  .job-remove-btn{
+    padding:6px 10px;border:1.5px solid #e7b3b3;border-radius:7px;background:#fff;color:#b04141;
+    font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  }
+  .job-remove-btn:hover{border-color:#b04141;background:#fff4f4}
   .evento-input-row { display: flex; align-items: center; gap: 12px; }
   .evento-prefix { font-size: 15px; font-weight: 600; color: var(--accent); white-space: nowrap; }
 
@@ -485,10 +498,6 @@ const SHORTCUT_DEFS = [
 
 let state = {
   activeTab: 'convert',
-  eventoNum: '',
-  file: null,
-  fileName: '',
-  filePages: 0,
   scale: 2,
   converting: false,
   zipping: false,
@@ -505,13 +514,11 @@ let state = {
   editorDirty: false,
   previewUrls: [],
   visibleResults: 30,
-  fileBuffer: null,
-  fileSize: 0,
   loadingPdf: false,
   cancelRequested: false,
   mergeProgress: 0,
-  pageFrom: '',
-  pageTo: '',
+  jobs: [],
+  nextJobId: 1,
   shortcuts: {...DEFAULT_SHORTCUTS},
   shortcutCaptureAction: '',
 };
@@ -626,51 +633,47 @@ async function render() {
       </div>
       ${state.activeTab==='convert' ? `
       <div class="form-group">
-        <h2><span class="step-badge">1</span> Número do Evento</h2>
-        <div class="evento-input-row">
-          <span class="evento-prefix">⊕ EVENTO</span>
-          <input type="number" id="eventoInput" placeholder="Ex: 12" value="${state.eventoNum}" min="1" />
-        </div>
-        ${state.eventoNum ? `
-        <div class="preview-bar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-          <span>EVENTO ${state.eventoNum}</span>
-          <span class="page-num-center">PÁGINA: 1</span>
-        </div>` : ''}
-      </div>
-      <div class="form-group">
-        <h2><span class="step-badge">2</span> Arquivo PDF</h2>
-        <div class="dropzone ${state.file ? 'has-file' : ''}" id="dropzone">
-          <input type="file" accept=".pdf" id="fileInput" />
-          ${state.file ? `
-            <p class="filename">📄 ${state.fileName} <span style="color:var(--text-muted);font-size:12px">(${formatFileSize(state.fileSize||0)})</span></p>
-            <p class="fileinfo">${state.loadingPdf?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite;vertical-align:middle"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Carregando PDF...':state.filePages > 0 ? state.filePages + ' página(s)' : 'Lendo...'}</p>
-          ` : `
-            <div class="dropzone-icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M24 32V16m0 0l-8 8m8-8l8 8"/><path d="M40 32v6a4 4 0 01-4 4H12a4 4 0 01-4-4v-6"/></svg></div>
-            <p>Clique ou arraste um arquivo PDF aqui</p>
-          `}
-        </div>      </div>
-      ${state.filePages>0?`
-      <div class="form-group">
-        <h2><span class="step-badge">3</span> Intervalo de Páginas <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(opcional)</span></h2>
-        <div class="evento-input-row">
-          <span class="evento-prefix" style="font-size:13px">De</span>
-          <input type="number" id="pageFromInput" placeholder="1" min="1" max="${state.filePages}" value="${state.pageFrom||''}" style="width:80px"/>
-          <span class="evento-prefix" style="font-size:13px">Até</span>
-          <input type="number" id="pageToInput" placeholder="${state.filePages}" min="1" max="${state.filePages}" value="${state.pageTo||''}" style="width:80px"/>
-          <span style="font-size:12px;color:var(--text-muted)">Total: ${state.filePages} página(s)</span>
+        <h2><span class="step-badge">1</span> Arquivos PDF</h2>
+        <div class="dropzone" id="dropzone">
+          <input type="file" accept=".pdf" id="fileInput" multiple />
+          <div class="dropzone-icon"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M24 32V16m0 0l-8 8m8-8l8 8"/><path d="M40 32v6a4 4 0 01-4 4H12a4 4 0 01-4-4v-6"/></svg></div>
+          <p>Clique ou arraste vários PDFs aqui</p>
+          <p class="fileinfo">${state.loadingPdf?'Carregando arquivos...':'Você pode adicionar todos de uma vez e preencher os eventos depois.'}</p>
         </div>
       </div>
-      `:''}
+      <div class="form-group">
+        <h2><span class="step-badge">2</span> Fila de PDFs</h2>
+        ${state.jobs.length ? `
+          <div class="job-list">
+            ${state.jobs.map(job=>`
+              <div class="job-row">
+                <div class="job-meta">
+                  <div class="job-title">📄 ${job.fileName}</div>
+                  <div class="job-sub">${job.filePages||'?'} página(s) · ${formatFileSize(job.fileSize||0)}</div>
+                  <div class="evento-input-row" style="margin-top:6px;flex-wrap:wrap">
+                    <span class="evento-prefix" style="font-size:12px">Evento</span>
+                    <input type="number" min="1" placeholder="Ex: 12" value="${job.eventoNum||''}" data-job-event="${job.id}" style="width:90px;padding:6px 8px;font-size:13px" />
+                    <span class="evento-prefix" style="font-size:12px">De</span>
+                    <input type="number" min="1" max="${job.filePages||''}" placeholder="1" value="${job.pageFrom||''}" data-job-from="${job.id}" style="width:70px;padding:6px 8px;font-size:13px" />
+                    <span class="evento-prefix" style="font-size:12px">Até</span>
+                    <input type="number" min="1" max="${job.filePages||''}" placeholder="${job.filePages||''}" value="${job.pageTo||''}" data-job-to="${job.id}" style="width:70px;padding:6px 8px;font-size:13px" />
+                  </div>
+                </div>
+                <button class="job-remove-btn" data-remove-job="${job.id}">Remover</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : `<p style="font-size:13px;color:var(--text-muted)">Nenhum PDF adicionado ainda.</p>`}
+      </div>
       <div class="form-group scale-group">
-        <h2><span class="step-badge">${state.filePages>0?'4':'3'}</span> Qualidade da Imagem</h2>
+        <h2><span class="step-badge">3</span> Qualidade da Imagem</h2>
         <div class="scale-options">
           ${[{v:1,label:'Normal (1x)'},{v:2,label:'Alta (2x)'},{v:3,label:'Máxima (3x)'}].map(s => `
             <button class="scale-btn ${state.scale===s.v?'active':''}" data-scale="${s.v}">${s.label}</button>
           `).join('')}
         </div>      </div>
-      <button class="convert-btn" id="convertBtn" ${(!state.file||!state.eventoNum||state.converting)?'disabled':''}>
-        ${state.converting?`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4m-3.5-7.5l-2.8 2.8m-5.4 5.4l-2.8 2.8m0-11l2.8 2.8m5.4 5.4l2.8 2.8"/></svg> Convertendo...`:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> Converter para Imagens`}
+      <button class="convert-btn" id="convertBtn" ${(state.jobs.length===0||state.converting)?'disabled':''}>
+        ${state.converting?`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4m-3.5-7.5l-2.8 2.8m-5.4 5.4l-2.8 2.8m0-11l2.8 2.8m5.4 5.4l2.8 2.8"/></svg> Convertendo...`:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> Converter fila (${state.jobs.length})`}
       </button>
       ${state.converting?`<div class="progress-section"><div class="progress-bar-track"><div class="progress-bar-fill" style="width:${state.progress}%"></div></div><p class="progress-text">${state.progressText}</p><button class="convert-btn" id="cancelBtn" style="background:#b04141;margin-top:8px;padding:8px 20px;font-size:13px">Cancelar</button></div>`:''}
       ` : `
@@ -720,7 +723,7 @@ async function render() {
                 ${r.edited?'<div class="edited-badge">Editado</div>':''}
               </div>
               <div class="page-card-footer">
-                <span>Evento ${state.eventoNum} — Página ${r.pageNum}${r.pendingDelete?' (marcada para excluir)':''}</span>
+                <span>Evento ${r.eventoNum} — Página ${r.pageNum}${r.pendingDelete?' (marcada para excluir)':''}</span>
                 <div class="page-card-actions">
                   <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
                   <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
@@ -772,29 +775,26 @@ function bindEvents() {
     render();
   });
 
-  const eventoInput=document.getElementById('eventoInput');
-  if(eventoInput)eventoInput.addEventListener('input',e=>{
-    state.eventoNum=e.target.value;
-    const previewBar=document.querySelector('.preview-bar');
-    if(state.eventoNum){
-      if(previewBar){previewBar.querySelector('span:not(.page-num-center)').textContent=`EVENTO ${state.eventoNum}`;}
-      else{render();}
-    }else if(previewBar){render();}
-    const cb=document.getElementById('convertBtn');
-    if(cb)cb.disabled=!state.file||!state.eventoNum||state.converting;
-  });
   const fileInput=document.getElementById('fileInput');
-  if(fileInput)fileInput.addEventListener('change',e=>{if(e.target.files[0])handleFileObj(e.target.files[0]);});
+  if(fileInput)fileInput.addEventListener('change',e=>{if(e.target.files?.length)handleFileList(e.target.files);});
   const dz=document.getElementById('dropzone');
   if(dz){
   dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
   dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
-  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');if(e.dataTransfer.files[0])handleFileObj(e.dataTransfer.files[0]);});
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');if(e.dataTransfer.files?.length)handleFileList(e.dataTransfer.files);});
   }
   document.querySelectorAll('.scale-btn').forEach(btn=>{btn.addEventListener('click',()=>{state.scale=parseInt(btn.dataset.scale);render();});});
-  const pf=document.getElementById('pageFromInput');if(pf)pf.addEventListener('input',e=>{state.pageFrom=e.target.value;});
-  const pt=document.getElementById('pageToInput');if(pt)pt.addEventListener('input',e=>{state.pageTo=e.target.value;});
   const cb=document.getElementById('convertBtn');if(cb)cb.addEventListener('click',startConversion);
+  document.querySelectorAll('[data-job-event]').forEach(input=>{
+    input.addEventListener('input',e=>updateJobField(parseInt(e.target.dataset.jobEvent,10),'eventoNum',e.target.value));
+  });
+  document.querySelectorAll('[data-job-from]').forEach(input=>{
+    input.addEventListener('input',e=>updateJobField(parseInt(e.target.dataset.jobFrom,10),'pageFrom',e.target.value));
+  });
+  document.querySelectorAll('[data-job-to]').forEach(input=>{
+    input.addEventListener('input',e=>updateJobField(parseInt(e.target.dataset.jobTo,10),'pageTo',e.target.value));
+  });
+  document.querySelectorAll('[data-remove-job]').forEach(btn=>{btn.addEventListener('click',()=>removeJob(parseInt(btn.dataset.removeJob,10)));});
   const cancelBtn=document.getElementById('cancelBtn');if(cancelBtn)cancelBtn.addEventListener('click',()=>{state.cancelRequested=true;});
   const mp=document.getElementById('mergePairsBtn');if(mp)mp.addEventListener('click',mergeResultsInPairs);
   const mt=document.getElementById('mergeTripletsBtn');if(mt)mt.addEventListener('click',mergeResultsInTriplets);
@@ -820,17 +820,53 @@ function formatFileSize(bytes){
   return (bytes/1048576).toFixed(1)+' MB';
 }
 
-async function handleFileObj(file){
-  if(file.type!=='application/pdf'){alert('Selecione um arquivo PDF.');return;}
-  releasePreviewUrls();
-  state.file=file;state.fileName=file.name;state.fileSize=file.size;state.filePages=0;state.results=[];state.visibleResults=30;state.fileBuffer=null;state.loadingPdf=true;render();
-  try{
-    const ab=await file.arrayBuffer();
-    state.fileBuffer=ab;
-    const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
-    state.filePages=pdf.numPages;
-  }catch(err){console.error(err);alert('Erro ao ler o PDF: '+err.message);}
-  state.loadingPdf=false;render();
+function baseNameFromFileName(name){
+  return (name||'arquivo').replace(/\.pdf$/i,'');
+}
+
+function updateJobField(jobId, field, value){
+  const job = state.jobs.find(j=>j.id===jobId);
+  if(!job) return;
+  job[field] = value;
+}
+
+function removeJob(jobId){
+  state.jobs = state.jobs.filter(job => job.id !== jobId);
+  render();
+}
+
+async function handleFileList(fileList){
+  const files = Array.from(fileList || []);
+  if(!files.length) return;
+  const pdfs = files.filter(file=>file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
+  if(!pdfs.length){alert('Selecione arquivos PDF.');return;}
+  state.loadingPdf=true;
+  render();
+  let added = 0;
+  for(const file of pdfs){
+    try{
+      const fileBuffer=await file.arrayBuffer();
+      const pdf=await pdfjsLib.getDocument({data:fileBuffer.slice(0)}).promise;
+      state.jobs.push({
+        id: state.nextJobId++,
+        eventoNum: '',
+        file,
+        fileName: file.name,
+        fileSize: file.size,
+        filePages: pdf.numPages,
+        fileBuffer,
+        pageFrom: '',
+        pageTo: '',
+      });
+      added++;
+    }catch(err){
+      console.error(err);
+      alert(`Erro ao ler o PDF "${file.name}": ${err.message}`);
+    }
+  }
+  state.loadingPdf=false;
+  if(added>0) showToast(`${added} PDF(s) adicionado(s). Agora preencha o evento de cada um.`);
+  render();
 }
 
 function drawBar(ctx,width,barH,eventoNum,pageNum){
@@ -846,31 +882,54 @@ function drawBar(ctx,width,barH,eventoNum,pageNum){
 }
 
 async function startConversion(){
-  const evNum=parseInt(state.eventoNum);
-  if(!evNum||evNum<1){alert('Informe um número de evento válido (maior que 0).');return;}
-  if(!state.file){alert('Selecione um arquivo PDF.');return;}
+  if(state.jobs.length===0){alert('Adicione pelo menos 1 PDF à fila para converter.');return;}
+  const invalidJob = state.jobs.find(job=>{
+    const evNum = parseInt(job.eventoNum,10);
+    return !evNum || evNum < 1;
+  });
+  if(invalidJob){
+    alert(`Preencha um número de evento válido para todos os PDFs.\nArquivo pendente: ${invalidJob.fileName}`);
+    return;
+  }
   releasePreviewUrls();
   state.cancelRequested=false;
   state.converting=true;state.progress=0;state.results=[];state.visibleResults=30;render();
   try{
-    const ab=state.fileBuffer||await state.file.arrayBuffer();const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;const total=pdf.numPages;
-    const fromPage=Math.max(1,Math.min(total,parseInt(state.pageFrom)||1));
-    const toPage=Math.max(fromPage,Math.min(total,parseInt(state.pageTo)||total));
-    const rangeTotal=toPage-fromPage+1;
+    const jobs = state.jobs.slice();
+    const pageCountByJob = [];
+    let totalPagesToProcess = 0;
+    for (const job of jobs) {
+      const ab = job.fileBuffer || await job.file.arrayBuffer();
+      if (!job.fileBuffer) job.fileBuffer = ab;
+      const pdf = await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
+      const total=pdf.numPages;
+      const fromPage=Math.max(1,Math.min(total,parseInt(job.pageFrom)||1));
+      const toPage=Math.max(fromPage,Math.min(total,parseInt(job.pageTo)||total));
+      const rangeTotal=toPage-fromPage+1;
+      pageCountByJob.push({job, fromPage, toPage, rangeTotal, total});
+      totalPagesToProcess += rangeTotal;
+    }
+
+    let donePages = 0;
     const pdfC=document.createElement('canvas');
     const fc=document.createElement('canvas');
-    for(let i=fromPage;i<=toPage;i++){
-      if(state.cancelRequested){state.progressText='Conversão cancelada.';state.converting=false;render();pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;return;}
-      const step=i-fromPage+1;
-      state.progressText=`Processando página ${step} de ${rangeTotal} (pg. ${i})...`;state.progress=Math.round(((step-1)/rangeTotal)*100);render();
-      const page=await pdf.getPage(i);const vp=page.getViewport({scale:state.scale});
-      pdfC.width=vp.width;pdfC.height=vp.height;
-      await page.render({canvasContext:pdfC.getContext('2d'),viewport:vp}).promise;
-      const barH=Math.max(Math.round(vp.width*0.045),32);fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
-      drawBar(ctx,vp.width,barH,state.eventoNum,i);ctx.drawImage(pdfC,0,barH);
-      const imageBlob=await canvasToBlobSafe(fc,'image/png');
-      state.results.push({imageBlob,pageNum:i,edited:false,pendingDelete:false});
-      await new Promise(requestAnimationFrame);
+    for(const item of pageCountByJob){
+      const ab=item.job.fileBuffer || await item.job.file.arrayBuffer();
+      const pdf=await pdfjsLib.getDocument({data:ab.slice(0)}).promise;
+      for(let i=item.fromPage;i<=item.toPage;i++){
+        if(state.cancelRequested){state.progressText='Conversão cancelada.';state.converting=false;render();pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;return;}
+        donePages++;
+        state.progressText=`Processando ${item.job.fileName} · página ${i} (${donePages} de ${totalPagesToProcess})...`;
+        state.progress=Math.round(((donePages-1)/totalPagesToProcess)*100);render();
+        const page=await pdf.getPage(i);const vp=page.getViewport({scale:state.scale});
+        pdfC.width=vp.width;pdfC.height=vp.height;
+        await page.render({canvasContext:pdfC.getContext('2d'),viewport:vp}).promise;
+        const barH=Math.max(Math.round(vp.width*0.045),32);fc.width=vp.width;fc.height=vp.height+barH;const ctx=fc.getContext('2d');
+        drawBar(ctx,vp.width,barH,item.job.eventoNum,i);ctx.drawImage(pdfC,0,barH);
+        const imageBlob=await canvasToBlobSafe(fc,'image/png');
+        state.results.push({imageBlob,pageNum:i,eventoNum:item.job.eventoNum,fileName:item.job.fileName,edited:false,pendingDelete:false});
+        await new Promise(requestAnimationFrame);
+      }
     }
     pdfC.width=0;pdfC.height=0;fc.width=0;fc.height=0;
     state.progress=100;state.progressText='Concluído!';state.converting=false;render();
@@ -1371,7 +1430,9 @@ function applyBlur(ctx,x,y,w,h,cw,ch){
   }
 }
 
-function getBaseName(){return state.fileName.replace(/\.pdf$/i,'');}
+function getResultBaseName(result){
+  return baseNameFromFileName(result?.fileName || 'arquivo');
+}
 
 async function downloadOne(idx,fmt='png'){
   const r=state.results[idx];
@@ -1389,21 +1450,23 @@ async function downloadOne(idx,fmt='png'){
   }
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
   a.href=url;
-  a.download=`${getBaseName()}_evento${state.eventoNum}_pagina${r.pageNum}.${ext}`;a.click();
+  const bn=getResultBaseName(r);
+  a.download=`${bn}_evento${r.eventoNum}_pagina${r.pageNum}.${ext}`;a.click();
   URL.revokeObjectURL(url);
 }
 
 async function downloadAllZip(){
   state.zipping=true;render();
   try{
-    const zip=new JSZip();const bn=getBaseName();const folder=zip.folder(`${bn}_evento${state.eventoNum}`);
+    const zip=new JSZip();const folder=zip.folder(`imagens_eventos`);
     for(const r of state.results){
       if(!r.imageBlob) throw new Error(`Página ${r.pageNum} sem imagem válida para exportação.`);
-      folder.file(`${bn}_evento${state.eventoNum}_pagina${r.pageNum}.png`,r.imageBlob);
+      const bn=getResultBaseName(r);
+      folder.file(`${bn}_evento${r.eventoNum}_pagina${r.pageNum}.png`,r.imageBlob);
     }
     const content=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
     const url=URL.createObjectURL(content);const a=document.createElement('a');a.href=url;
-    a.download=`${bn}_evento${state.eventoNum}.zip`;a.click();URL.revokeObjectURL(url);
+    a.download=`imagens_eventos.zip`;a.click();URL.revokeObjectURL(url);
   }catch(err){console.error(err);alert('Erro ao compactar: '+err.message);}
   state.zipping=false;render();
 }
