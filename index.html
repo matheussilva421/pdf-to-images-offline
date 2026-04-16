@@ -1441,7 +1441,7 @@ function normalizePageKey(pageNum){
   return {first, raw};
 }
 
-function buildZipFileName(result){
+function buildZipFileName(result,sequenceNum=null){
   const bn=getResultBaseName(result);
   const eventoNum=parseInt(result?.eventoNum,10);
   const evento=Number.isFinite(eventoNum)&&eventoNum>0?eventoNum:0;
@@ -1450,7 +1450,8 @@ function buildZipFileName(result){
     const n=parseInt(part,10);
     return Number.isFinite(n)?String(n).padStart(4,'0'):part;
   }).join('-');
-  return `${bn}_evento${String(evento).padStart(4,'0')}_pagina${pageLabel}.png`;
+  const sequencePrefix=Number.isFinite(sequenceNum)&&sequenceNum>0?`ordem${String(sequenceNum).padStart(4,'0')}_`:'';
+  return `${sequencePrefix}${bn}_evento${String(evento).padStart(4,'0')}_pagina${pageLabel}.png`;
 }
 
 async function downloadOne(idx,fmt='png'){
@@ -1478,20 +1479,11 @@ async function downloadAllZip(){
   state.zipping=true;render();
   try{
     const zip=new JSZip();const folder=zip.folder(`imagens_eventos`);
-    const orderedResults=state.results.slice().sort((a,b)=>{
-      const eventA=parseInt(a?.eventoNum,10);
-      const eventB=parseInt(b?.eventoNum,10);
-      const safeEventA=Number.isFinite(eventA)&&eventA>0?eventA:Number.MAX_SAFE_INTEGER;
-      const safeEventB=Number.isFinite(eventB)&&eventB>0?eventB:Number.MAX_SAFE_INTEGER;
-      if(safeEventA!==safeEventB) return safeEventA-safeEventB;
-      const pageA=normalizePageKey(a?.pageNum);
-      const pageB=normalizePageKey(b?.pageNum);
-      if(pageA.first!==pageB.first) return pageA.first-pageB.first;
-      return pageA.raw.localeCompare(pageB.raw);
-    });
-    for(const r of orderedResults){
+    const orderedResults=state.results.slice();
+    for(let i=0;i<orderedResults.length;i++){
+      const r=orderedResults[i];
       if(!r.imageBlob) throw new Error(`Página ${r.pageNum} sem imagem válida para exportação.`);
-      folder.file(buildZipFileName(r),r.imageBlob);
+      folder.file(buildZipFileName(r,i+1),r.imageBlob);
     }
     const content=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
     const url=URL.createObjectURL(content);const a=document.createElement('a');a.href=url;
