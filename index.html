@@ -517,11 +517,24 @@ let state = {
   loadingPdf: false,
   cancelRequested: false,
   mergeProgress: 0,
+  allowCrossEventMerge: false,
   jobs: [],
   nextJobId: 1,
   shortcuts: {...DEFAULT_SHORTCUTS},
   shortcutCaptureAction: '',
 };
+
+function getSourceEvents(items){
+  return [...new Set(items.map(item=>String(item?.eventoNum ?? '').trim()).filter(Boolean))];
+}
+
+function buildMergedEventLabel(events){
+  return events.join('+');
+}
+
+function buildSourcePages(items){
+  return items.map(item=>String(item?.pageNum ?? ''));
+}
 
 function showToast(msg){
   const t=document.createElement('div');t.className='toast';t.textContent=msg;
@@ -701,6 +714,10 @@ async function render() {
         <div class="results-header">
           <h2>✅ ${state.results.length} imagem(ns) gerada(s)</h2>
           <div class="results-actions">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);padding:0 4px;">
+              <input type="checkbox" id="allowCrossEventMerge" ${state.allowCrossEventMerge?'checked':''}/>
+              Permitir juntar páginas de eventos diferentes
+            </label>
             <button class="download-all-btn" id="mergePairsBtn" ${state.results.length<2||state.zipping||state.merging||state.merging3?'disabled':''}>
               ${state.merging?`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M12 2v4m0 12v4m-10-10h4m12 0h4"/></svg> Juntando... ${state.mergeProgress||0}%`:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M10 12h4"/></svg> Juntar 2 em 1`}
             </button>
@@ -723,7 +740,7 @@ async function render() {
                 ${r.edited?'<div class="edited-badge">Editado</div>':''}
               </div>
               <div class="page-card-footer">
-                <span>Evento ${r.eventoNum} — Página ${r.pageNum}${r.pendingDelete?' (marcada para excluir)':''}</span>
+                <span>Evento ${r.eventoNum || '—'} — Página ${r.pageNum}${r.pendingDelete?' (marcada para excluir)':''}</span>
                 <div class="page-card-actions">
                   <span style="font-size:11px;color:var(--text-muted);margin-right:auto">${r.imageBlob?formatFileSize(r.imageBlob.size):''}</span>
                   <button class="page-download-btn" data-idx="${i}" data-fmt="png" aria-label="Baixar página ${r.pageNum} como PNG"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14m0 0l-6-6m6 6l6-6"/></svg> PNG</button>
@@ -798,6 +815,8 @@ function bindEvents() {
   const cancelBtn=document.getElementById('cancelBtn');if(cancelBtn)cancelBtn.addEventListener('click',()=>{state.cancelRequested=true;});
   const mp=document.getElementById('mergePairsBtn');if(mp)mp.addEventListener('click',mergeResultsInPairs);
   const mt=document.getElementById('mergeTripletsBtn');if(mt)mt.addEventListener('click',mergeResultsInTriplets);
+  const acem=document.getElementById('allowCrossEventMerge');
+  if(acem) acem.addEventListener('change',e=>{state.allowCrossEventMerge=!!e.target.checked;});
   const da=document.getElementById('downloadAllBtn');if(da)da.addEventListener('click',downloadAllZip);
   const lm=document.getElementById('loadMoreBtn');if(lm)lm.addEventListener('click',()=>{state.visibleResults+=30;render();});
   document.querySelectorAll('.page-download-btn[data-idx]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();downloadOne(parseInt(btn.dataset.idx),btn.dataset.fmt||'png');});});
@@ -965,7 +984,8 @@ async function mergeResultsInPairs(){
   const removedCount=applyPendingDeletionsBeforeMerge();
   if(removedCount>0) showToast(`${removedCount} página(s) marcada(s) foram excluídas antes da junção.`);
   if(state.results.length<2){alert('Você precisa de pelo menos 2 imagens para juntar após aplicar as exclusões marcadas.');render();return;}
-  if(!confirm('Juntar as imagens de 2 em 2 lado a lado?\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.')) return;
+  const mergeModeText=state.allowCrossEventMerge?'permitida':'bloqueada';
+  if(!confirm(`Juntar as imagens de 2 em 2 lado a lado?\nModo de mistura entre eventos: ${mergeModeText}.\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.`)) return;
   state.merging=true;
   state.mergeProgress=0;
   render();
@@ -979,6 +999,14 @@ async function mergeResultsInPairs(){
       if(!second){
         merged.push({...first});
         state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
+        continue;
+      }
+      const group=[first,second];
+      const sourceEvents=getSourceEvents(group);
+      if(!state.allowCrossEventMerge && sourceEvents.length>1){
+        merged.push({...first},{...second});
+        state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
+        await new Promise(requestAnimationFrame);
         continue;
       }
       const [imgA,imgB]=await Promise.all([loadImageFromBlob(first.imageBlob),loadImageFromBlob(second.imageBlob)]);
@@ -995,6 +1023,9 @@ async function mergeResultsInPairs(){
       merged.push({
         imageBlob,
         pageNum:`${first.pageNum}-${second.pageNum}`,
+        eventoNum:buildMergedEventLabel(sourceEvents),
+        sourceEvents,
+        sourcePages:buildSourcePages(group),
         edited:first.edited||second.edited,
       });
       state.mergeProgress=Math.round(((i/2+1)/totalPairs)*100);
@@ -1017,7 +1048,8 @@ async function mergeResultsInTriplets(){
   const removedCount=applyPendingDeletionsBeforeMerge();
   if(removedCount>0) showToast(`${removedCount} página(s) marcada(s) foram excluídas antes da junção.`);
   if(state.results.length<3){alert('Você precisa de pelo menos 3 imagens para juntar 3 em 1 após aplicar as exclusões marcadas.');render();return;}
-  if(!confirm('Juntar as imagens de 3 em 3 lado a lado?\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.')) return;
+  const mergeModeText=state.allowCrossEventMerge?'permitida':'bloqueada';
+  if(!confirm(`Juntar as imagens de 3 em 3 lado a lado?\nModo de mistura entre eventos: ${mergeModeText}.\n\n⚠️ Esta operação é IRREVERSÍVEL. As imagens originais serão substituídas pelas versões combinadas.`)) return;
   state.merging3=true;
   state.mergeProgress=0;
   render();
@@ -1035,6 +1067,14 @@ async function mergeResultsInTriplets(){
         continue;
       }
       if(!third){
+        const pairGroup=[first,second];
+        const sourceEvents=getSourceEvents(pairGroup);
+        if(!state.allowCrossEventMerge && sourceEvents.length>1){
+          merged.push({...first},{...second});
+          state.mergeProgress=Math.round(((Math.floor(i/3)+1)/totalGroups)*100);
+          await new Promise(requestAnimationFrame);
+          continue;
+        }
         // apenas 2 restantes: juntar como par
         const [imgA,imgB]=await Promise.all([loadImageFromBlob(first.imageBlob),loadImageFromBlob(second.imageBlob)]);
         mergeCanvas.width=imgA.naturalWidth+imgB.naturalWidth;
@@ -1045,7 +1085,22 @@ async function mergeResultsInTriplets(){
         // Borda separadora
         (function drawSep(c,x,h){c.save();c.strokeStyle='rgba(0,0,0,0.35)';c.lineWidth=10;c.beginPath();c.moveTo(x,0);c.lineTo(x,h);c.stroke();c.restore();})(ctx,imgA.naturalWidth,mergeCanvas.height);
         const imageBlob=await canvasToBlobSafe(mergeCanvas,'image/png');
-        merged.push({imageBlob,pageNum:`${first.pageNum}-${second.pageNum}`,edited:first.edited||second.edited});
+        merged.push({
+          imageBlob,
+          pageNum:`${first.pageNum}-${second.pageNum}`,
+          eventoNum:buildMergedEventLabel(sourceEvents),
+          sourceEvents,
+          sourcePages:buildSourcePages(pairGroup),
+          edited:first.edited||second.edited
+        });
+        state.mergeProgress=Math.round(((Math.floor(i/3)+1)/totalGroups)*100);
+        await new Promise(requestAnimationFrame);
+        continue;
+      }
+      const group=[first,second,third];
+      const sourceEvents=getSourceEvents(group);
+      if(!state.allowCrossEventMerge && sourceEvents.length>1){
+        merged.push({...first},{...second},{...third});
         state.mergeProgress=Math.round(((Math.floor(i/3)+1)/totalGroups)*100);
         await new Promise(requestAnimationFrame);
         continue;
@@ -1065,6 +1120,9 @@ async function mergeResultsInTriplets(){
       merged.push({
         imageBlob,
         pageNum:`${first.pageNum}-${second.pageNum}-${third.pageNum}`,
+        eventoNum:buildMergedEventLabel(sourceEvents),
+        sourceEvents,
+        sourcePages:buildSourcePages(group),
         edited:first.edited||second.edited||third.edited,
       });
       state.mergeProgress=Math.round(((Math.floor(i/3)+1)/totalGroups)*100);
@@ -1443,15 +1501,15 @@ function normalizePageKey(pageNum){
 
 function buildZipFileName(result,sequenceNum=null){
   const bn=getResultBaseName(result);
-  const eventoNum=parseInt(result?.eventoNum,10);
-  const evento=Number.isFinite(eventoNum)&&eventoNum>0?eventoNum:0;
+  const eventoRaw=String(result?.eventoNum ?? '').trim();
+  const eventoLabel=(eventoRaw || 'sem-evento').replace(/\+/g,'-').replace(/[^\d-]/g,'') || 'sem-evento';
   const pageInfo=normalizePageKey(result?.pageNum);
   const pageLabel=pageInfo.raw.split('-').map(part=>{
     const n=parseInt(part,10);
     return Number.isFinite(n)?String(n).padStart(4,'0'):part;
   }).join('-');
   const sequencePrefix=Number.isFinite(sequenceNum)&&sequenceNum>0?`ordem${String(sequenceNum).padStart(4,'0')}_`:'';
-  return `${sequencePrefix}${bn}_evento${String(evento).padStart(4,'0')}_pagina${pageLabel}.png`;
+  return `${sequencePrefix}${bn}_evento${eventoLabel}_pagina${pageLabel}.png`;
 }
 
 async function downloadOne(idx,fmt='png'){
@@ -1471,7 +1529,8 @@ async function downloadOne(idx,fmt='png'){
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
   a.href=url;
   const bn=getResultBaseName(r);
-  a.download=`${bn}_evento${r.eventoNum}_pagina${r.pageNum}.${ext}`;a.click();
+  const eventoLabel=(String(r.eventoNum ?? '').trim() || 'sem-evento').replace(/\+/g,'-').replace(/[^\d-]/g,'') || 'sem-evento';
+  a.download=`${bn}_evento${eventoLabel}_pagina${r.pageNum}.${ext}`;a.click();
   URL.revokeObjectURL(url);
 }
 
