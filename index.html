@@ -1500,16 +1500,13 @@ function normalizePageKey(pageNum){
 }
 
 function buildZipFileName(result,sequenceNum=null){
-  const bn=getResultBaseName(result);
+  const processoBase=getResultBaseName(result).replace(/[^\w.-]/g,'-');
   const eventoRaw=String(result?.eventoNum ?? '').trim();
-  const eventoLabel=(eventoRaw || 'sem-evento').replace(/\+/g,'-').replace(/[^\d-]/g,'') || 'sem-evento';
+  const eventoLabel=(eventoRaw || 'X').replace(/[^\d-]/g,'') || 'X';
   const pageInfo=normalizePageKey(result?.pageNum);
-  const pageLabel=pageInfo.raw.split('-').map(part=>{
-    const n=parseInt(part,10);
-    return Number.isFinite(n)?String(n).padStart(4,'0'):part;
-  }).join('-');
-  const sequencePrefix=Number.isFinite(sequenceNum)&&sequenceNum>0?`ordem${String(sequenceNum).padStart(4,'0')}_`:'';
-  return `${sequencePrefix}${bn}_evento${eventoLabel}_pagina${pageLabel}.png`;
+  const flsLabel=(pageInfo.raw || 'x').replace(/[^\d-]/g,'-') || 'x';
+  const ordem=Number.isFinite(sequenceNum)&&sequenceNum>0?String(sequenceNum):'0';
+  return `${ordem}.Processo-${processoBase}-Evento-${eventoLabel}_fls_${flsLabel}.png`;
 }
 
 async function downloadOne(idx,fmt='png'){
